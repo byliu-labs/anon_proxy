@@ -1,7 +1,9 @@
 import json
 import re
+import sys
 from typing import Callable, Protocol
 
+from anon_proxy.known_entities import KnownEntityDetector
 from anon_proxy.mapping import PIIStore
 from anon_proxy.privacy_filter import PIIEntity, PrivacyFilter
 
@@ -26,25 +28,49 @@ class Masker:
         filter: PrivacyFilter | None = None,
         store: PIIStore | None = None,
         extra_detectors: list[Detector] | None = None,
+        canary: str = "warn",
+        min_known_entity_len: int = 6,
     ) -> None:
+        if canary not in {"warn", "fix", "off"}:
+            raise ValueError("canary must be one of: warn, fix, off")
+        if min_known_entity_len < 0:
+            raise ValueError("min_known_entity_len must be >= 0")
         self._filter = filter or PrivacyFilter()
         self._store = store or PIIStore()
-        self._extra: list[Detector] = list(extra_detectors or [])
+        self._canary = canary
+        self._canary_detectors: list[Detector] = list(extra_detectors or [])
+        self._pre_detectors: list[Detector] = []
+        if min_known_entity_len:
+            self._pre_detectors.append(
+                KnownEntityDetector(self._store, min_len=min_known_entity_len)
+            )
+        self._pre_detectors.extend(self._canary_detectors)
 
     @property
     def store(self) -> PIIStore:
         return self._store
 
     def mask(self, text: str) -> str:
-        entities: list[PIIEntity] = list(self._filter.detect(text))
-        for detector in self._extra:
+        ml_entities: list[PIIEntity] = list(self._filter.detect(text))
+
+        entities: list[PIIEntity] = []
+        for detector in self._pre_detectors:
             entities.extend(detector.detect(text))
+        entities.extend(ml_entities)
         entities = _resolve_overlaps(entities)
-        # Replace right-to-left so earlier spans' offsets stay valid.
-        for e in sorted(entities, key=lambda x: x.start, reverse=True):
-            token = self._store.get_or_create(e.label, e.text).token
-            text = text[: e.start] + token + text[e.end :]
-        return text
+        masked = self._substitute(text, entities)
+
+        canary_hits = self._canary_hits(masked)
+        if canary_hits:
+            for hit in canary_hits:
+                suffix = " - masking now" if self._canary == "fix" else ""
+                print(
+                    f"warning: canary: {hit.label} {hit.text!r} survived masking{suffix}",
+                    file=sys.stderr,
+                )
+            if self._canary == "fix":
+                masked = self._substitute(masked, canary_hits)
+        return masked
 
     def unmask(self, text: str) -> str:
         return self._sub(text, lambda s: s)
@@ -74,6 +100,21 @@ class Masker:
 
         return pattern.sub(repl, text)
 
+    def _substitute(self, text: str, entities: list[PIIEntity]) -> str:
+        # Replace right-to-left so earlier spans' offsets stay valid.
+        for e in sorted(entities, key=lambda x: x.start, reverse=True):
+            token = self._store.get_or_create(e.label, e.text).token
+            text = text[: e.start] + token + text[e.end :]
+        return text
+
+    def _canary_hits(self, masked: str) -> list[PIIEntity]:
+        if self._canary == "off" or not self._canary_detectors:
+            return []
+        hits: list[PIIEntity] = []
+        for detector in self._canary_detectors:
+            hits.extend(detector.detect(masked))
+        return _drop_placeholder_overlaps(_resolve_overlaps(hits), masked)
+
 
 def _resolve_overlaps(entities: list[PIIEntity]) -> list[PIIEntity]:
     """Keep a non-overlapping subset of spans.
@@ -100,3 +141,20 @@ def _resolve_overlaps(entities: list[PIIEntity]) -> list[PIIEntity]:
             continue
         kept.append(e)
     return kept
+
+
+def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PIIEntity]:
+    if not entities:
+        return entities
+    placeholders = [
+        match.span() for match in re.finditer(r"<[A-Z][A-Z0-9_]*_\d+>", text)
+    ]
+    if not placeholders:
+        return entities
+    return [
+        entity
+        for entity in entities
+        if not any(
+            entity.start < end and start < entity.end for start, end in placeholders
+        )
+    ]

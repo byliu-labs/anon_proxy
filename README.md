@@ -83,7 +83,10 @@ uv run python -m anon_proxy.server [options]
 | `--backend` | `auto` | PII detection backend (`auto`, `cpu`, `mps`, `mlx`) |
 | `--extra-upstream` | — | Add custom provider: `name=url[;adapter=anthropic\|openai][;path_prefix=/path]` |
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
-| `--patterns <file>` | — | JSON file of extra regex detectors: `{"LABEL": "regex", ...}` |
+| `--patterns <file>` | — | JSON file of extra regex detectors: `{"LABEL": "regex", ...}`; same-label entries override built-in defaults |
+| `--no-default-patterns` | off | Disable built-in regex detectors for common PII and secrets |
+| `--canary warn\|fix\|off` | `warn` | Run regex detectors after masking; `fix` masks any surviving hit before forwarding |
+| `--min-known-entity-len <N>` | `6` | Minimum stored value length for exact known-entity matching; `0` disables |
 | `--merge-gap-file <file>` | — | JSON file overriding per-label adjacency merge chars (see `merge_gap.json.example`) |
 | `--chunk-size <N>` | `1500` | Max chars per model inference pass — lower values reduce peak VRAM |
 
@@ -171,7 +174,7 @@ With `--debug`, each request prints a compact diff to stderr:
 
 **What is NOT masked:** the system prompt (tool schemas and static instructions), tool definitions, and extended-thinking blocks (signatures would break).
 
-**How it works:** PII spans get stable placeholder tokens (`<PERSON_1>`, `<EMAIL_1>`, `<ADDRESS_1>`, …) stored in a per-session dictionary. The same value always maps to the same token across turns so the model stays coherent. Responses are unmasked before reaching your client.
+**How it works:** PII spans get stable placeholder tokens (`<PERSON_1>`, `<EMAIL_1>`, `<ADDRESS_1>`, …) stored in a per-session dictionary. The same value always maps to the same token across turns so the model stays coherent. Once a value is learned, exact later occurrences are masked anywhere, including code, logs, and JSON. Responses are unmasked before reaching your client.
 
 ---
 
@@ -182,7 +185,10 @@ With `--debug`, each request prints a compact diff to stderr:
 | `patterns.json` | Extra regex patterns for PII the ML model misses (SSNs, IPs, internal IDs) |
 | `merge_gap.json` | Per-label chars allowed inside a gap when merging adjacent spans (e.g. hyphen for `PERSON` so "Jean-Luc" → one token) |
 
-Copy from the `.example` files to get started.
+Built-in patterns cover common emails, phone numbers, SSNs, IPv4 addresses,
+credit cards with separators, and high-structure secrets such as AWS keys,
+GitHub tokens, JWTs, private-key headers, and Slack tokens. Copy from the
+`.example` files to add deployment-specific patterns.
 
 ---
 

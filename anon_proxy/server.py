@@ -28,6 +28,7 @@ from starlette.routing import Mount, Route
 
 from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.adapters import openai as openai_adapter
+from anon_proxy.default_patterns import DEFAULT_PATTERNS
 from anon_proxy.masker import Masker
 from anon_proxy.privacy_filter import PrivacyFilter, load_merge_gap
 from anon_proxy.regex_detector import RegexDetector, load_patterns
@@ -51,10 +52,19 @@ def _trunc(s: str, n: int = 100) -> str:
     return repr(s if len(s) <= n else s[:n] + "…")
 
 
-def _log_request(provider: str, path: str, incoming: dict, masked: dict, new_store_entries: list[tuple[str, str]]) -> None:
+def _log_request(
+    provider: str,
+    path: str,
+    incoming: dict,
+    masked: dict,
+    new_store_entries: list[tuple[str, str]],
+) -> None:
     model = incoming.get("model", "?")
     n_msg = len(incoming.get("messages", []))
-    print(f"\n{_DIM}==== {provider} {path} | model={model} | {n_msg} msg ===={_RESET}", file=sys.stderr)
+    print(
+        f"\n{_DIM}==== {provider} {path} | model={model} | {n_msg} msg ===={_RESET}",
+        file=sys.stderr,
+    )
     if new_store_entries:
         print(f"{_DIM}[store +{len(new_store_entries)}]{_RESET}", file=sys.stderr)
         for token, original in new_store_entries:
@@ -88,7 +98,9 @@ def _diff_content(before: dict, after: dict) -> list[str]:
                     continue
                 btype = bb.get("type", "?")
                 if btype == "text":
-                    lines.append(f"  {role}[{j}] text: {_trunc(bb.get('text',''))} → {_trunc(ba.get('text',''))}")
+                    lines.append(
+                        f"  {role}[{j}] text: {_trunc(bb.get('text', ''))} → {_trunc(ba.get('text', ''))}"
+                    )
                 elif btype == "tool_use" or btype == "tool":
                     bi = json.dumps(bb.get("input", {}), ensure_ascii=False)
                     ai = json.dumps(ba.get("input", {}), ensure_ascii=False)
@@ -123,7 +135,9 @@ def _log_response(upstream: dict, unmasked: dict) -> None:
                 continue
             btype = bb.get("type", "?")
             if btype == "text":
-                lines.append(f"  text[{i}]: {_trunc(bb.get('text',''))} → {_trunc(ba.get('text',''))}")
+                lines.append(
+                    f"  text[{i}]: {_trunc(bb.get('text', ''))} → {_trunc(ba.get('text', ''))}"
+                )
             elif btype == "tool_use":
                 bi = json.dumps(bb.get("input", {}), ensure_ascii=False)
                 ai = json.dumps(ba.get("input", {}), ensure_ascii=False)
@@ -135,8 +149,12 @@ def _log_response(upstream: dict, unmasked: dict) -> None:
         for choice in choices:
             msg = choice.get("message", {})
             content = msg.get("content", "")
-            if isinstance(content, str) and content != unmasked.get("choices", [{}])[0].get("message", {}).get("content", ""):
-                lines.append(f"  content: {_trunc(content)} → {_trunc(unmasked['choices'][0]['message']['content'])}")
+            if isinstance(content, str) and content != unmasked.get("choices", [{}])[
+                0
+            ].get("message", {}).get("content", ""):
+                lines.append(
+                    f"  content: {_trunc(content)} → {_trunc(unmasked['choices'][0]['message']['content'])}"
+                )
 
     if lines:
         print(f"{_GREEN}[unmasked response]{_RESET}", file=sys.stderr)
@@ -186,7 +204,9 @@ def build_app(
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(600.0, connect=10.0)
+        ) as client:
             app.state.client = client
             app.state.masker = masker
             app.state.debug = debug
@@ -200,11 +220,14 @@ def build_app(
         if not path_parts or not path_parts[0]:
             # Root path - return provider list
             return Response(
-                content=json.dumps({
-                    "providers": list(all_upstreams.keys()),
-                    "usage": f"Use /{{provider}}/{{path}} to route to a provider. "
-                           f"Available providers: {', '.join(sorted(all_upstreams.keys()))}"
-                }, indent=2),
+                content=json.dumps(
+                    {
+                        "providers": list(all_upstreams.keys()),
+                        "usage": f"Use /{{provider}}/{{path}} to route to a provider. "
+                        f"Available providers: {', '.join(sorted(all_upstreams.keys()))}",
+                    },
+                    indent=2,
+                ),
                 media_type="application/json",
             )
 
@@ -225,7 +248,11 @@ def build_app(
         adapter = _ADAPTERS.get(upstream_config.adapter)
         if adapter is None:
             return Response(
-                content=json.dumps({"error": f"No adapter for provider type: {upstream_config.adapter}"}),
+                content=json.dumps(
+                    {
+                        "error": f"No adapter for provider type: {upstream_config.adapter}"
+                    }
+                ),
                 status_code=500,
                 media_type="application/json",
             )
@@ -257,7 +284,10 @@ async def _handle_proxy(
     api_path = "/" + path_parts[1] if len(path_parts) > 1 else "/"
 
     # Build upstream URL
-    upstream_url = urljoin(upstream_config.base_url.rstrip("/") + "/", upstream_config.path_prefix.strip("/"))
+    upstream_url = urljoin(
+        upstream_config.base_url.rstrip("/") + "/",
+        upstream_config.path_prefix.strip("/"),
+    )
     upstream_url = urljoin(upstream_url.rstrip("/") + "/", api_path.lstrip("/"))
 
     # For non-POST/PUT/DELETE requests with no body, just proxy through
@@ -267,7 +297,9 @@ async def _handle_proxy(
     raw_body = await request.body()
 
     # For requests with no body or non-JSON, just proxy
-    if not raw_body or request.headers.get("content-type", "").startswith("multipart/form-data"):
+    if not raw_body or request.headers.get("content-type", "").startswith(
+        "multipart/form-data"
+    ):
         return await _passthrough(request, upstream_url, body_override=raw_body)
 
     try:
@@ -392,7 +424,9 @@ def _get_streaming_flag(body: dict) -> bool:
     return body.get("stream", False)
 
 
-async def _passthrough(request: Request, upstream_url: str, *, body_override: bytes | None = None) -> Response:
+async def _passthrough(
+    request: Request, upstream_url: str, *, body_override: bytes | None = None
+) -> Response:
     """Pass through request without masking."""
     client: httpx.AsyncClient = request.app.state.client
     body = body_override if body_override is not None else await request.body()
@@ -460,13 +494,28 @@ def _parse_extra_upstream(spec: str) -> tuple[str, UpstreamConfig]:
     )
 
 
+def _effective_patterns(
+    user_patterns: dict[str, str] | None,
+    default_patterns: bool,
+) -> dict[str, str]:
+    if default_patterns:
+        return {**DEFAULT_PATTERNS, **(user_patterns or {})}
+    return dict(user_patterns or {})
+
+
 def main() -> None:
     import argparse
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="anon-proxy — PII masking proxy for LLM APIs")
-    parser.add_argument("--host", default=os.environ.get("ANON_PROXY_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("ANON_PROXY_PORT", "8080")))
+    parser = argparse.ArgumentParser(
+        description="anon-proxy — PII masking proxy for LLM APIs"
+    )
+    parser.add_argument(
+        "--host", default=os.environ.get("ANON_PROXY_HOST", "127.0.0.1")
+    )
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("ANON_PROXY_PORT", "8080"))
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -476,13 +525,33 @@ def main() -> None:
     parser.add_argument(
         "--patterns",
         default=os.environ.get("ANON_PROXY_PATTERNS"),
-        help="Path to a JSON file of additional regex patterns (label -> regex).",
+        help="Path to a JSON file of additional regex patterns (label -> regex). "
+        "These override same-label default patterns.",
+    )
+    parser.add_argument(
+        "--no-default-patterns",
+        action="store_true",
+        default=os.environ.get("ANON_PROXY_NO_DEFAULT_PATTERNS", "").lower()
+        in ("1", "true", "yes"),
+        help="Disable built-in regex detectors for common PII and secrets.",
+    )
+    parser.add_argument(
+        "--canary",
+        choices=["warn", "fix", "off"],
+        default=os.environ.get("ANON_PROXY_CANARY", "warn"),
+        help="Run regex detectors after masking: warn, fix, or off (default: warn).",
+    )
+    parser.add_argument(
+        "--min-known-entity-len",
+        type=int,
+        default=int(os.environ.get("ANON_PROXY_MIN_KNOWN_ENTITY_LEN", "6")),
+        help="Minimum stored value length for exact known-entity matching; 0 disables.",
     )
     parser.add_argument(
         "--merge-gap-file",
         default=os.environ.get("ANON_PROXY_MERGE_GAP"),
         help="Path to a JSON file of per-label merge-gap chars (label -> chars). "
-             "Overrides entries in DEFAULT_MERGE_GAP_ALLOWED.",
+        "Overrides entries in DEFAULT_MERGE_GAP_ALLOWED.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -490,7 +559,7 @@ def main() -> None:
         default=int(os.environ.get("ANON_PROXY_CHUNK_SIZE", "1500")),
         metavar="N",
         help="Max characters per chunk fed to the model (default: 1500). "
-             "Lower values reduce peak GPU memory at the cost of more forward passes.",
+        "Lower values reduce peak GPU memory at the cost of more forward passes.",
     )
     parser.add_argument(
         "--backend",
@@ -509,7 +578,7 @@ def main() -> None:
         default=[],
         metavar="NAME=URL[;adapter=anthropic|openai][;path_prefix=/PATH]",
         help="Add an extra upstream provider. Repeatable. "
-             "Example: --extra-upstream myprovider=https://api.example.com;adapter=openai",
+        "Example: --extra-upstream myprovider=https://api.example.com;adapter=openai",
     )
     args = parser.parse_args()
 
@@ -524,13 +593,24 @@ def main() -> None:
             sys.exit(2)
 
     extra_detectors = []
+    user_patterns = None
     if args.patterns:
         try:
-            patterns = load_patterns(args.patterns)
+            user_patterns = load_patterns(args.patterns)
         except (OSError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(2)
-        extra_detectors.append(RegexDetector(patterns))
+
+    try:
+        effective_patterns = _effective_patterns(
+            user_patterns,
+            not args.no_default_patterns,
+        )
+        if effective_patterns:
+            extra_detectors.append(RegexDetector(effective_patterns))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
 
     pf: PrivacyFilter | None = None
     if args.merge_gap_file or args.chunk_size != 1500 or args.backend != "auto":
@@ -548,11 +628,16 @@ def main() -> None:
             device=device,
         )
 
-    masker = (
-        Masker(filter=pf, extra_detectors=extra_detectors)
-        if (pf is not None or extra_detectors)
-        else None
-    )
+    try:
+        masker = Masker(
+            filter=pf,
+            extra_detectors=extra_detectors,
+            canary=args.canary,
+            min_known_entity_len=args.min_known_entity_len,
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
 
     app = build_app(masker=masker, extra_upstreams=extra_upstreams, debug=args.debug)
 
@@ -562,7 +647,10 @@ def main() -> None:
         f"anon-proxy listening on http://{args.host}:{args.port}\n"
         f"  providers: {', '.join(all_providers)}\n"
         f"  debug: {args.debug}\n"
-        f"  patterns: {args.patterns or '(none)'}\n"
+        f"  default-patterns: {not args.no_default_patterns}\n"
+        f"  patterns: {args.patterns or '(defaults only)'}\n"
+        f"  canary: {args.canary}\n"
+        f"  min-known-entity-len: {args.min_known_entity_len}\n"
         f"  merge-gap-file: {args.merge_gap_file or '(defaults)'}\n"
         f"  backend: {backend_display}\n"
         f"\nUsage examples:\n"

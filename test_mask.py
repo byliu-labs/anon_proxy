@@ -36,7 +36,14 @@ from openai import OpenAI
 from prompt_toolkit import ANSI, PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 
-from anon_proxy import Masker, PrivacyFilter, RegexDetector, load_merge_gap, load_patterns
+from anon_proxy import (
+    Masker,
+    PrivacyFilter,
+    RegexDetector,
+    load_merge_gap,
+    load_patterns,
+)
+from anon_proxy.default_patterns import DEFAULT_PATTERNS
 
 
 # Provider configurations
@@ -129,18 +136,36 @@ def main() -> int:
         "--no-mask",
         action="store_true",
         help="Skip local masking/unmasking; send raw text and display raw replies. "
-             "Pair with *_BASE_URL to test the proxy's own masking.",
+        "Pair with *_BASE_URL to test the proxy's own masking.",
     )
     parser.add_argument(
         "--patterns",
         default=None,
-        help="Path to a JSON file of additional regex patterns (label -> regex).",
+        help="Path to a JSON file of additional regex patterns (label -> regex). "
+        "These override same-label default patterns.",
+    )
+    parser.add_argument(
+        "--no-default-patterns",
+        action="store_true",
+        help="Disable built-in regex detectors for common PII and secrets.",
+    )
+    parser.add_argument(
+        "--canary",
+        choices=["warn", "fix", "off"],
+        default="warn",
+        help="Run regex detectors after masking: warn, fix, or off (default: warn).",
+    )
+    parser.add_argument(
+        "--min-known-entity-len",
+        type=int,
+        default=6,
+        help="Minimum stored value length for exact known-entity matching; 0 disables.",
     )
     parser.add_argument(
         "--merge-gap-file",
         default=None,
         help="Path to a JSON file of per-label merge-gap chars (label -> chars). "
-             "Overrides entries in DEFAULT_MERGE_GAP_ALLOWED.",
+        "Overrides entries in DEFAULT_MERGE_GAP_ALLOWED.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -173,12 +198,14 @@ def main() -> int:
     else:
         print("Loading openai/privacy-filter ...", file=sys.stderr)
         extra_detectors = []
+        patterns = {} if args.no_default_patterns else dict(DEFAULT_PATTERNS)
         if args.patterns:
             try:
-                patterns = load_patterns(args.patterns)
+                patterns.update(load_patterns(args.patterns))
             except (OSError, ValueError) as e:
                 print(f"{RED}error:{RESET} {e}", file=sys.stderr)
                 return 2
+        if patterns:
             extra_detectors.append(RegexDetector(patterns))
         pf: PrivacyFilter | None = None
         if args.merge_gap_file or args.chunk_size != 1500:
@@ -190,7 +217,16 @@ def main() -> int:
                     print(f"{RED}error:{RESET} {e}", file=sys.stderr)
                     return 2
             pf = PrivacyFilter(merge_gap_allowed=merge_gap, chunk_size=args.chunk_size)
-        masker = Masker(filter=pf, extra_detectors=extra_detectors)
+        try:
+            masker = Masker(
+                filter=pf,
+                extra_detectors=extra_detectors,
+                canary=args.canary,
+                min_known_entity_len=args.min_known_entity_len,
+            )
+        except ValueError as e:
+            print(f"{RED}error:{RESET} {e}", file=sys.stderr)
+            return 2
 
     # Create client based on provider
     base_url = os.environ.get(base_url_env)
@@ -254,9 +290,7 @@ def main() -> int:
                 )
                 history.append({"role": "assistant", "content": assistant_text})
                 if usage:
-                    usage_str = (
-                        f"  {DIM}usage: in={usage.prompt_tokens} out={usage.completion_tokens}{RESET}"
-                    )
+                    usage_str = f"  {DIM}usage: in={usage.prompt_tokens} out={usage.completion_tokens}{RESET}"
                 else:
                     usage_str = f"  {DIM}(usage unavailable){RESET}"
         except KeyboardInterrupt:
@@ -281,7 +315,9 @@ def main() -> int:
         turn += 1
 
 
-def await_anthropic_stream(client, model: str, max_tokens: int, history: list[dict]) -> tuple[str, any]:
+def await_anthropic_stream(
+    client, model: str, max_tokens: int, history: list[dict]
+) -> tuple[str, any]:
     """Stream Anthropic API response."""
     with client.messages.stream(
         model=model,
@@ -298,7 +334,9 @@ def await_anthropic_stream(client, model: str, max_tokens: int, history: list[di
     return "".join(b.text for b in final.content if b.type == "text"), final
 
 
-def await_openai_stream(client, model: str, max_tokens: int, history: list[dict]) -> tuple[str, any]:
+def await_openai_stream(
+    client, model: str, max_tokens: int, history: list[dict]
+) -> tuple[str, any]:
     """Stream OpenAI API response."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
     stream = client.chat.completions.create(
