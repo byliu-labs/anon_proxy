@@ -8,15 +8,19 @@ Covered:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.mapping import PIIStore
 from anon_proxy.server import (
+    build_app,
     _maybe_save_store,
     _parse_retry_after,
     _should_mask_request,
@@ -358,6 +362,57 @@ class TestUpstreamRequest:
             content=b'{"key": "val"}',
             headers={"Authorization": "Bearer xyz"},
             params={"page": "1"},
+        )
+
+
+class TestProxyMaskingConcurrency:
+    @pytest.mark.anyio
+    async def test_event_loop_not_blocked_during_mask(self, monkeypatch):
+        def slow_mask_request(body, masker):
+            time.sleep(0.2)
+            return body
+
+        async def fake_upstream_request(*_args, **_kwargs):
+            response = MagicMock(spec=httpx.Response)
+            response.status_code = 200
+            response.headers = {"content-type": "application/json"}
+            response.json.return_value = {"content": []}
+            return response
+
+        monkeypatch.setattr(anthropic_adapter, "mask_request", slow_mask_request)
+        monkeypatch.setattr(
+            "anon_proxy.server._upstream_request", fake_upstream_request
+        )
+        app = build_app(
+            masker=SimpleNamespace(store=PIIStore(), unmask=lambda text: text),
+            system_inject=False,
+        )
+
+        async def post_messages(client):
+            return await client.post(
+                "/anthropic/v1/messages",
+                json={
+                    "model": "claude-test",
+                    "messages": [{"role": "user", "content": "hello Alice"}],
+                },
+            )
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                t0 = time.perf_counter()
+                r1, r2 = await asyncio.gather(
+                    post_messages(client),
+                    post_messages(client),
+                )
+                elapsed = time.perf_counter() - t0
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert elapsed < 0.35, (
+            f"requests serialized on the event loop: {elapsed:.2f}s"
         )
 
     async def test_max_retries_parameter(self, mock_client):
