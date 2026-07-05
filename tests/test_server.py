@@ -411,9 +411,7 @@ class TestProxyMaskingConcurrency:
 
         assert r1.status_code == 200
         assert r2.status_code == 200
-        assert elapsed < 0.35, (
-            f"requests serialized on the event loop: {elapsed:.2f}s"
-        )
+        assert elapsed < 0.35, f"requests serialized on the event loop: {elapsed:.2f}s"
 
     async def test_max_retries_parameter(self, mock_client):
         """Custom max_retries limits the number of retries."""
