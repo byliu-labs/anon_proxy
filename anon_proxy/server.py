@@ -501,7 +501,9 @@ async def _handle_proxy(
         _safe_metric(proxy_metrics.record_masking_error)
         print("error: masking failed; refusing to forward unmasked", file=sys.stderr)
         return Response(
-            content=json.dumps({"error": "anon-proxy: masking failed; request blocked"}),
+            content=json.dumps(
+                {"error": "anon-proxy: masking failed; request blocked"}
+            ),
             status_code=502,
             media_type="application/json",
         )

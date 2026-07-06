@@ -49,7 +49,9 @@ class ProxyMetrics:
         with self._lock:
             self.masking_errors_total += 1
 
-    def record_tokens(self, client_label: str, n: int, now: float | None = None) -> None:
+    def record_tokens(
+        self, client_label: str, n: int, now: float | None = None
+    ) -> None:
         if n <= 0:
             return
         now = time.time() if now is None else now
