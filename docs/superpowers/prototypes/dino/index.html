@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>anon-proxy dino — throughput indicator prototype</title>
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d31; --ink:#e6e6e6; --dim:#9aa0a6; --accent:#57c785; --danger:#e5534b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro",system-ui,sans-serif;
+         background:var(--bg); color:var(--ink); padding:28px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 24px; }
+  .row { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+  .panel { background:var(--panel); border:1px solid #3a3d43; border-radius:12px; padding:20px; }
+  .panel h2 { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:0 0 14px; }
+
+  /* fake macOS menu bar */
+  .menubar { display:flex; align-items:center; gap:16px; justify-content:flex-end;
+             background:linear-gradient(#3a3d43,#303338); border-radius:8px; padding:5px 14px;
+             box-shadow:inset 0 1px 0 #4a4d53; min-width:420px; }
+  .menubar .clock { color:#cfd2d6; font-size:13px; }
+  .menubar canvas.tray { image-rendering:pixelated; cursor:pointer; }
+
+  canvas.stage { image-rendering:pixelated; background:#111214; border-radius:10px; display:block; }
+
+  /* dropdown mock */
+  .dropdown { width:320px; background:#26282c; border:1px solid #3a3d43; border-radius:10px;
+              padding:8px 0; box-shadow:0 12px 40px rgba(0,0,0,.5); font-size:13px; }
+  .dropdown .item { padding:6px 14px; display:flex; justify-content:space-between; gap:10px; }
+  .dropdown .head { font-weight:600; }
+  .dropdown .muted { color:var(--dim); }
+  .dropdown .warn { color:var(--danger); }
+  .dropdown .sep { height:1px; background:#3a3d43; margin:8px 0; }
+  .dropdown .act { color:#c9d5ff; }
+
+  label.ctl { display:block; margin:0 0 16px; }
+  label.ctl .lab { display:flex; justify-content:space-between; color:var(--dim); font-size:12px; margin-bottom:6px; }
+  input[type=range] { width:280px; accent-color:var(--accent); }
+  .states { display:flex; gap:8px; flex-wrap:wrap; }
+  .states button { background:#3a3d43; color:var(--ink); border:1px solid #4a4d53; border-radius:7px;
+                   padding:7px 12px; cursor:pointer; font-size:13px; }
+  .states button.on { background:var(--accent); color:#08240f; border-color:var(--accent); font-weight:600; }
+  .states button.on.alarm { background:var(--danger); color:#2a0806; border-color:var(--danger); }
+  .readout { font-variant-numeric:tabular-nums; color:var(--dim); margin-top:8px; }
+  .hint { color:var(--dim); font-size:12px; max-width:360px; margin-top:14px; }
+  code { background:#111214; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+  <h1>🦖 anon-proxy status dino — feel the throughput</h1>
+  <p class="sub">The menu-bar icon <em>is</em> a running dinosaur. Its gait speed tracks live token throughput. Drag the slider; flip the states.</p>
+
+  <div class="row">
+    <div class="panel">
+      <h2>What you'd see in the menu bar</h2>
+      <div class="menubar">
+        <span class="muted" style="color:#9aa0a6">🔒 anon-proxy</span>
+        <canvas class="tray" id="tray" width="22" height="24"></canvas>
+        <span class="clock">Sun 3:41 PM</span>
+      </div>
+
+      <div style="margin-top:20px">
+        <canvas class="stage" id="stage" width="240" height="132"></canvas>
+        <div class="readout" id="readout">idle · 0 tok/s</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Drive it</h2>
+      <label class="ctl">
+        <span class="lab"><span>token throughput</span><span id="tokval">0 tok/s</span></span>
+        <input type="range" id="tok" min="0" max="600" value="0" step="5">
+      </label>
+      <div class="states" id="states">
+        <button data-state="live" class="on">▶ live (slider)</button>
+        <button data-state="idle">idle</button>
+        <button data-state="alarm">⚠ masking error</button>
+        <button data-state="down">down</button>
+      </div>
+      <p class="hint">Speed → animation FPS is <code>1.5 + tok_per_sec/28</code>, capped. Alarm latches: the dino trips a cactus, turns red, and stays until reset. Down = the status poll failed (proxy not listening).</p>
+    </div>
+
+    <div class="panel">
+      <h2>Dropdown detail</h2>
+      <div class="dropdown" id="drop"></div>
+    </div>
+  </div>
+
+<script>
+// ---- pixel dino sprite (facing right). '#'=body, 'o'=eye hole. 20w x 22h ----
+const BODY = [
+  "            ######  ",
+  "           ########## ",
+  "           ##o####### ",
+  "           ######### ",
+  "           #### ",
+  "           #### ",
+  "  #        ##### ",
+  "  ##      ####### ",
+  "  ###    ######## ",
+  "  ############### ",
+  "  ############### ",
+  "   ############## ",
+  "    ############# ",
+  "     ###########  ",
+  "      #########   ",
+  "      ########    ",
+  "      ####  ###   ",
+  "      ###    ##   ",
+  "      ##     ##   ",
+];
+// leg variants appended below body (rows 19-21)
+const LEGS_A = [ "      ##     #   ", "      ##     #   ", "      ##     ##  " ];
+const LEGS_B = [ "      #     ##   ", "      #     ##   ", "     ##     ##   " ];
+const LEGS_STAND = [ "      ##    ##   ", "      ##    ##   ", "      ##    ##   " ];
+const DEAD_EYE_ROW = 2; // swap 'o' to 'x' when dead
+
+function grid(legs, dead){
+  const rows = BODY.concat(legs);
+  return rows.map((r,i)=>{
+    if(dead && i===DEAD_EYE_ROW) return r.replace('o','x');
+    return r;
+  });
+}
+const FRAME_RUN_A  = grid(LEGS_A,false);
+const FRAME_RUN_B  = grid(LEGS_B,false);
+const FRAME_STAND  = grid(LEGS_STAND,false);
+const FRAME_DEAD   = grid(LEGS_STAND,true);
+
+function drawSprite(ctx, rows, ox, oy, scale, color){
+  ctx.fillStyle = color;
+  for(let y=0;y<rows.length;y++){
+    const row = rows[y];
+    for(let x=0;x<row.length;x++){
+      const c = row[x];
+      if(c==='#'){ ctx.fillRect(ox+x*scale, oy+y*scale, scale, scale); }
+      else if(c==='x'){ // dead eye = little cross
+        ctx.save(); ctx.fillStyle = color==='#e5534b' ? '#2a0806':'#111214';
+        ctx.fillRect(ox+x*scale, oy+y*scale, scale, scale); ctx.restore();
+      }
+    }
+  }
+}
+function drawCactus(ctx, ox, oy, scale, color){
+  ctx.fillStyle = color;
+  const c = ["  #  "," ### ","# # #","# # #","### #","  #  ","  #  ","  #  "];
+  for(let y=0;y<c.length;y++) for(let x=0;x<c[y].length;x++)
+    if(c[y][x]==='#') ctx.fillRect(ox+x*scale, oy+y*scale, scale, scale);
+}
+function drawGround(ctx,w,y,color){ ctx.fillStyle=color; ctx.fillRect(0,y,w,2); }
+
+// ---- state machine ----
+let state = 'live';       // live | idle | alarm | down
+let tokPerSec = 0;
+let runPhase = 0;         // toggles A/B
+let acc = 0, last = performance.now();
+let cactusX = 999;        // for alarm animation
+
+const stage = document.getElementById('stage'), sctx = stage.getContext('2d');
+const tray = document.getElementById('tray'), tctx = tray.getContext('2d');
+const readout = document.getElementById('readout');
+
+function fpsFor(tps){ return Math.min(12, 1.5 + tps/28); }
+function bodyColor(){ return state==='alarm' ? '#e5534b' : state==='down' ? '#5a5d63' : '#e6e6e6'; }
+
+function render(now){
+  const dt = now - last; last = now;
+
+  // advance run animation only when actually running
+  const running = (state==='live' && tokPerSec>0);
+  if(running){
+    const period = 1000 / fpsFor(tokPerSec);
+    acc += dt;
+    if(acc >= period){ acc = 0; runPhase ^= 1; }
+  }
+
+  let frame;
+  if(state==='down') frame = FRAME_STAND;
+  else if(state==='alarm') frame = FRAME_DEAD;
+  else if(!running) frame = FRAME_STAND;
+  else frame = runPhase ? FRAME_RUN_A : FRAME_RUN_B;
+
+  // --- big stage ---
+  sctx.clearRect(0,0,stage.width,stage.height);
+  drawGround(sctx, stage.width, 118, state==='down' ? '#33363b' : '#6b6f76');
+  const scale = 5, baseY = 118 - 22*scale;
+  // gentle bob while running
+  const bob = running ? (runPhase? -scale : 0) : 0;
+  drawSprite(sctx, frame, 40, baseY+bob, scale, bodyColor());
+  if(state==='alarm'){
+    if(cactusX>200) cactusX = 210;
+    drawCactus(sctx, cactusX, 118-8*scale, scale, '#e5534b');
+  }
+
+  // --- tray (real-ish size) ---
+  tctx.clearRect(0,0,tray.width,tray.height);
+  drawSprite(tctx, frame, 1, 2, 1, bodyColor());
+  if(state==='alarm') drawCactus(tctx, 16, 8, 1, '#e5534b');
+
+  // readout
+  let label = state==='down' ? 'down · poll failed'
+            : state==='alarm' ? 'ALARM · masking error (latched)'
+            : (running ? 'running' : 'idle') + ' · ' + Math.round(tokPerSec) + ' tok/s';
+  readout.textContent = label;
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+// ---- controls ----
+const tok = document.getElementById('tok'), tokval = document.getElementById('tokval');
+tok.addEventListener('input', ()=>{
+  tokPerSec = +tok.value; tokval.textContent = tok.value + ' tok/s';
+  if(state!=='alarm' && state!=='down') state='live';
+  syncStateButtons(); renderDrop();
+});
+const stateBtns = document.querySelectorAll('#states button');
+stateBtns.forEach(b=> b.addEventListener('click', ()=>{
+  state = b.dataset.state;
+  if(state==='idle'){ tokPerSec=0; tok.value=0; tokval.textContent='0 tok/s'; }
+  if(state==='live' && tokPerSec===0){ tokPerSec=180; tok.value=180; tokval.textContent='180 tok/s'; }
+  cactusX = 999;
+  syncStateButtons(); renderDrop();
+}));
+function syncStateButtons(){
+  stateBtns.forEach(b=>{
+    const on = b.dataset.state===state || (state==='live' && b.dataset.state==='live');
+    b.classList.toggle('on', b.dataset.state===state);
+    b.classList.toggle('alarm', b.dataset.state==='alarm' && state==='alarm');
+  });
+}
+
+// ---- dropdown mock ----
+function renderDrop(){
+  const up = state!=='down';
+  const rows = [];
+  rows.push(`<div class="item head"><span>🦖 ${up?'Running':'Not running'}</span><span class="muted">${up?'127.0.0.1:8080':''}</span></div>`);
+  if(up){
+    rows.push(`<div class="item"><span class="muted">tokens/sec</span><span>${state==='alarm'?0:Math.round(tokPerSec)}</span></div>`);
+    rows.push(`<div class="item"><span class="muted">Driving</span><span>Claude Code</span></div>`);
+    rows.push(`<div class="item"><span class="muted">Uptime · backend</span><span>2h14m · mps</span></div>`);
+    rows.push(`<div class="item"><span class="muted">Requests · PII · tokens</span><span>143 · 512 · 1.2M</span></div>`);
+    rows.push(`<div class="item"><span class="muted">By agent</span><span>Claude Code 412 · Codex 88</span></div>`);
+    const errs = state==='alarm' ? 2 : 0;
+    rows.push(`<div class="item ${errs?'warn':'muted'}"><span>${errs?'⚠️ ':''}Masking errors</span><span>${errs}${errs?'  ›':''}</span></div>`);
+  }
+  rows.push(`<div class="sep"></div>`);
+  rows.push(`<div class="item act"><span>Open status JSON · Copy base URL</span></div>`);
+  rows.push(`<div class="item act"><span>Start / Stop / Restart proxy</span></div>`);
+  rows.push(`<div class="item act"><span>Start at login</span><span class="muted">✓</span></div>`);
+  rows.push(`<div class="item act"><span>Quit menu bar</span></div>`);
+  document.getElementById('drop').innerHTML = rows.join('');
+}
+renderDrop();
+</script>
+</body>
+</html>
