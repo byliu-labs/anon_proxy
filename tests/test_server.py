@@ -16,13 +16,28 @@ import httpx
 import pytest
 
 from anon_proxy.mapping import PIIStore
+from anon_proxy.default_patterns import DEFAULT_PATTERNS
 from anon_proxy.server import (
+    _effective_patterns,
     _maybe_save_store,
     _parse_retry_after,
     _should_mask_request,
     _upstream_request,
     _write_store_json,
 )
+
+
+class TestEffectivePatterns:
+    def test_default_patterns_include_defaults_by_default(self):
+        assert _effective_patterns({}, True) == DEFAULT_PATTERNS
+
+    def test_user_patterns_override_default_label(self):
+        patterns = _effective_patterns({"EMAIL": "custom"}, True)
+
+        assert patterns["EMAIL"] == "custom"
+
+    def test_defaults_can_be_disabled(self):
+        assert _effective_patterns({"EMAIL": "custom"}, False) == {"EMAIL": "custom"}
 
 
 # ---------------------------------------------------------------------------
