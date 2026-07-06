@@ -8,6 +8,7 @@ Covered:
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,12 +17,14 @@ import httpx
 import pytest
 
 from anon_proxy.mapping import PIIStore
+from anon_proxy.event_sink import EventSink
 from anon_proxy.server import (
     _extract_usage,
     _maybe_save_store,
     _should_mask_request,
     _upstream_request,
     _write_store_json,
+    build_app,
 )
 
 
@@ -265,6 +268,62 @@ class TestUpstreamRequest:
             headers={"Authorization": "Bearer xyz"},
             params={"page": "1"},
         )
+
+
+class TestLogJsonMetrics:
+    @pytest.mark.anyio
+    async def test_metrics_route_emits_json_event_without_response_text(
+        self, monkeypatch, capsys
+    ):
+        async def fake_upstream_request(*_args, **_kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "content": [{"type": "text", "text": "hello Alice"}],
+                    "usage": {"input_tokens": 10},
+                },
+                headers={"content-type": "application/json"},
+            )
+
+        monkeypatch.setattr(
+            "anon_proxy.server._upstream_request", fake_upstream_request
+        )
+        app = build_app(
+            masker=SimpleNamespace(
+                store=PIIStore(),
+                mask=lambda text: text,
+                unmask=lambda text: text,
+                mask_obj=lambda obj, walker: walker(obj),
+            ),
+            metrics=True,
+            event_sink=EventSink(log_json=True),
+            system_inject=False,
+        )
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                response = await client.post(
+                    "/anthropic/v1/messages",
+                    json={
+                        "model": "claude-test",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                )
+
+        assert response.status_code == 200
+        line = capsys.readouterr().err.strip()
+        payload = json.loads(line)
+        assert payload["event"] == "metrics"
+        assert payload["provider"] == "anthropic"
+        assert payload["usage"] == {
+            "input": 10,
+            "cache_read": 0,
+            "cache_creation": 0,
+        }
+        assert "Alice" not in line
 
 
 class TestExtractUsage:

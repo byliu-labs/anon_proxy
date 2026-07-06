@@ -35,6 +35,7 @@ from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.adapters import openai as openai_adapter
 from anon_proxy.capture import Capturer
 from anon_proxy.config import Config, load_config
+from anon_proxy.event_sink import EventSink
 from anon_proxy.mapping import PIIStore
 from anon_proxy.masker import Masker, telemetry_scope
 from anon_proxy.privacy_filter import PrivacyFilter
@@ -217,21 +218,7 @@ def _log_metrics(
     usage: dict | None = None,
 ) -> None:
     """Print per-turn latency breakdown to stderr."""
-    proxy = max(e2e - upstream, 0.0)
-    pct = (proxy / e2e * 100.0) if e2e > 0 else 0.0
-    token_part = ""
-    if usage is not None:
-        token_part = (
-            f"  tokens: in={usage['input']} cache_read={usage['cache_read']} "
-            f"cache_create={usage['cache_creation']}"
-        )
-    print(
-        f"{_MAGENTA}[metrics {provider}]{_RESET} "
-        f"e2e={e2e * 1000:.1f}ms  upstream={upstream * 1000:.1f}ms  "
-        f"proxy={proxy * 1000:.1f}ms ({pct:.1f}%){token_part}",
-        file=sys.stderr,
-    )
-    sys.stderr.flush()
+    EventSink().metrics(provider=provider, e2e=e2e, upstream=upstream, usage=usage)
 
 
 async def _timed_aiter(
@@ -301,6 +288,7 @@ def build_app(
     capture: Capturer | None = None,
     system_inject: bool = True,
     store_path: str | None = None,
+    event_sink: EventSink | None = None,
 ) -> Starlette:
     """Build the Starlette application.
 
@@ -315,6 +303,7 @@ def build_app(
             verbatim instead of hallucinating fill-in values
     """
     masker = masker or Masker()
+    event_sink = event_sink or EventSink()
     all_upstreams = {**BUILT_IN_UPSTREAMS, **(extra_upstreams or {})}
 
     @asynccontextmanager
@@ -330,6 +319,7 @@ def build_app(
             app.state.upstreams = all_upstreams
             app.state.system_inject = system_inject
             app.state.store_path = store_path
+            app.state.event_sink = event_sink
             try:
                 yield
             finally:
@@ -402,6 +392,7 @@ async def _handle_proxy(
     debug: bool = request.app.state.debug
     metrics: bool = request.app.state.metrics
     capture: Capturer | None = request.app.state.capture
+    event_sink: EventSink = request.app.state.event_sink
     t_start = time.perf_counter()
     upstream_acc: list[float] = [0.0]
 
@@ -537,10 +528,10 @@ async def _handle_proxy(
                         for usage_chunk in usage_acc:
                             merged.update(usage_chunk)
                         usage = _extract_usage({"usage": merged})
-                    _log_metrics(
-                        upstream_config.name,
-                        time.perf_counter() - t_start,
-                        upstream_acc[0],
+                    event_sink.metrics(
+                        provider=upstream_config.name,
+                        e2e=time.perf_counter() - t_start,
+                        upstream=upstream_acc[0],
                         usage=usage,
                     )
                 if capture is not None:
@@ -612,10 +603,10 @@ async def _handle_proxy(
             if debug:
                 _log_response(resp_json, unmasked)
             if metrics:
-                _log_metrics(
-                    upstream_config.name,
-                    time.perf_counter() - t_start,
-                    upstream_acc[0],
+                event_sink.metrics(
+                    provider=upstream_config.name,
+                    e2e=time.perf_counter() - t_start,
+                    upstream=upstream_acc[0],
                     usage=_extract_usage(resp_json),
                 )
             if capture is not None:
@@ -646,8 +637,10 @@ async def _handle_proxy(
             )
 
     if metrics:
-        _log_metrics(
-            upstream_config.name, time.perf_counter() - t_start, upstream_acc[0]
+        event_sink.metrics(
+            provider=upstream_config.name,
+            e2e=time.perf_counter() - t_start,
+            upstream=upstream_acc[0],
         )
     return Response(
         content=upstream_resp.content,
@@ -809,6 +802,13 @@ def main() -> None:
         help="Log per-turn latency breakdown (e2e, upstream, proxy) to stderr.",
     )
     parser.add_argument(
+        "--log-json",
+        action="store_true",
+        default=os.environ.get("ANON_PROXY_LOG_JSON", "").lower()
+        in ("1", "true", "yes"),
+        help="Emit supported operational events as JSON lines instead of human text.",
+    )
+    parser.add_argument(
         "--capture",
         default=os.environ.get("ANON_PROXY_CAPTURE"),
         metavar="PATH",
@@ -964,6 +964,7 @@ def main() -> None:
         capture=capturer,
         system_inject=system_inject,
         store_path=store_path,
+        event_sink=EventSink(log_json=args.log_json),
     )
 
     all_providers = sorted({**BUILT_IN_UPSTREAMS, **extra_upstreams}.keys())
@@ -973,6 +974,7 @@ def main() -> None:
         f"  providers: {', '.join(all_providers)}\n"
         f"  debug: {args.debug}\n"
         f"  metrics: {args.metrics}\n"
+        f"  log_json: {args.log_json}\n"
         f"  capture: {args.capture or '(off)'}\n"
         f"  store: {args.store or '(none)'}\n"
         f"  config: {args.config or '(None)'}\n"
