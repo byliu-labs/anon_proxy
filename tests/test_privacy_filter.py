@@ -536,6 +536,46 @@ class TestConstructor:
         assert captured["provider"] == "CPUExecutionProvider"
         assert f._pipe is fake_pipeline
 
+    def test_onnx_loader_prefers_optimum(self, monkeypatch, fake_pipeline):
+        calls: list[str] = []
+
+        def _optimum(*, provider):
+            calls.append(f"optimum:{provider}")
+            return fake_pipeline
+
+        def _runtime(*, provider):
+            calls.append(f"runtime:{provider}")
+            return fake_pipeline
+
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model_with_optimum", _optimum)
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model_with_runtime", _runtime)
+
+        assert (
+            privacy_filter._load_onnx_model(provider="CPUExecutionProvider")
+            is fake_pipeline
+        )
+        assert calls == ["optimum:CPUExecutionProvider"]
+
+    def test_onnx_loader_falls_back_to_runtime(self, monkeypatch, fake_pipeline):
+        calls: list[str] = []
+
+        def _optimum(*, provider):
+            calls.append(f"optimum:{provider}")
+            raise ImportError("missing optimum")
+
+        def _runtime(*, provider):
+            calls.append(f"runtime:{provider}")
+            return fake_pipeline
+
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model_with_optimum", _optimum)
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model_with_runtime", _runtime)
+
+        assert (
+            privacy_filter._load_onnx_model(provider="CPUExecutionProvider")
+            is fake_pipeline
+        )
+        assert calls == ["optimum:CPUExecutionProvider", "runtime:CPUExecutionProvider"]
+
     def test_onnx_backend_accepts_provider_override(self, monkeypatch, fake_pipeline):
         captured: dict = {}
 

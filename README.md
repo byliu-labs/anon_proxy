@@ -145,8 +145,21 @@ uv run python -m anon_proxy.server --backend onnx
 ```
 
 The ONNX backend loads the upstream `openai/privacy-filter` ONNX export through
-the same token-classification pipeline interface as the default torch backend,
-so chunking, masking, and merge behavior remain shared.
+the same `PrivacyFilter` interface as the default torch backend, so chunking,
+masking, and merge behavior remain shared. It is the recommended opt-in backend
+when this parity and benchmark gate passes on the target host:
+
+```bash
+uv run --extra onnx anon-proxy-backend-eval
+```
+
+The gate fails if ONNX misses any entity detected by the torch backend, or if the
+ONNX warm-median latency improvement is less than 30%.
+
+Current validation on the built-in samples: ONNX detected every torch-detected
+entity and measured 38.0% faster warm median (`0.200s` vs `0.323s`, 3 measured
+iterations after 1 warmup). Re-run the gate on deployment hardware before relying
+on that speedup.
 
 ### Config file
 

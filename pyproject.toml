@@ -39,7 +39,6 @@ classifiers = [
 dependencies = [
     "anthropic>=0.96.0",
     "httpx>=0.28.1",
-    "numpy>=2.2.0",
     "openai>=2.35.1",
     "prompt-toolkit>=3.0.52",
     "starlette>=1.0.0",
@@ -61,6 +60,7 @@ Issues = "https://github.com/KevinXuxuxu/anon_proxy/issues"
 
 [project.scripts]
 anon-proxy = "anon_proxy.server:main"
+anon-proxy-backend-eval = "anon_proxy.backend_eval_cli:main"
 anon-proxy-capture-report = "anon_proxy.capture_report:main"
 anon-proxy-store = "anon_proxy.store_cli:main"
 

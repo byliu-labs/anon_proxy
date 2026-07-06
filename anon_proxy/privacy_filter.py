@@ -2,7 +2,6 @@ import threading
 from dataclasses import dataclass
 from typing import Literal
 
-import numpy as np
 from transformers import pipeline
 
 
@@ -159,6 +158,35 @@ def _build_pipeline(
 
 def _load_onnx_model(*, provider: str):
     try:
+        return _load_onnx_model_with_optimum(provider=provider)
+    except (ImportError, RuntimeError, ValueError, OSError):
+        return _load_onnx_model_with_runtime(provider=provider)
+
+
+def _load_onnx_model_with_optimum(*, provider: str):
+    try:
+        from optimum.onnxruntime import ORTModelForTokenClassification
+        from transformers import AutoTokenizer
+    except ImportError as e:
+        raise ImportError("optimum.onnxruntime is unavailable") from e
+
+    model = ORTModelForTokenClassification.from_pretrained(
+        PrivacyFilter.MODEL_ID,
+        subfolder="onnx",
+        file_name="model_q4f16.onnx",
+        provider=provider,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(PrivacyFilter.MODEL_ID)
+    return pipeline(
+        task="token-classification",
+        model=model,
+        tokenizer=tokenizer,
+        aggregation_strategy="simple",
+    )
+
+
+def _load_onnx_model_with_runtime(*, provider: str):
+    try:
         import onnxruntime as ort
     except ImportError as e:
         raise RuntimeError(
@@ -238,6 +266,8 @@ class _OnnxTokenClassificationPipeline:
 
 
 def _softmax(logits):
+    import numpy as np
+
     shifted = logits - np.max(logits, axis=-1, keepdims=True)
     exp = np.exp(shifted)
     return exp / np.sum(exp, axis=-1, keepdims=True)
