@@ -94,9 +94,7 @@ class Masker:
         self._cache_size = cache_size
         self._cache_lock = threading.RLock()
         # LRU cache: content_hash -> (safe entity telemetry, masked_text)
-        self._cache: OrderedDict[str, tuple[list[dict[str, Any]], str]] = (
-            OrderedDict()
-        )
+        self._cache: OrderedDict[str, tuple[list[dict[str, Any]], str]] = OrderedDict()
         # LRU cache: block_hash -> already-masked block-shaped object
         self._block_cache: OrderedDict[str, Any] = OrderedDict()
 
@@ -334,7 +332,9 @@ def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PII
     ]
 
 
-def _entity_telemetry(entities: list[PIIEntity], *, source: str) -> list[dict[str, Any]]:
+def _entity_telemetry(
+    entities: list[PIIEntity], *, source: str
+) -> list[dict[str, Any]]:
     """Return safe per-entity telemetry without matched text."""
     return [
         {

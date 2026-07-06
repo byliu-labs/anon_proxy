@@ -152,7 +152,9 @@ def _build_pipeline(
     if backend == "onnx":
         return _load_onnx_model(provider=onnx_provider)
     allowed = "auto, torch, cpu, mps, onnx"
-    raise ValueError(f"unsupported privacy filter backend {backend!r}; expected {allowed}")
+    raise ValueError(
+        f"unsupported privacy filter backend {backend!r}; expected {allowed}"
+    )
 
 
 def _load_onnx_model(*, provider: str):
@@ -208,9 +210,7 @@ class _OnnxTokenClassificationPipeline:
         )
         offsets = encoded.pop("offset_mapping")[0].tolist()
         ort_inputs = {
-            name: encoded[name]
-            for name in self._input_names
-            if name in encoded
+            name: encoded[name] for name in self._input_names if name in encoded
         }
         logits = self._session.run(None, ort_inputs)[0][0]
         probabilities = _softmax(logits)

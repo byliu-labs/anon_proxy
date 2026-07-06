@@ -53,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Summarize safe detector telemetry from anon-proxy capture JSONL.",
     )
     parser.add_argument("captures", nargs="+", help="Capture JSONL files to read.")
-    parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    parser.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of text."
+    )
     args = parser.parse_args(argv)
     try:
         report = build_report([Path(p) for p in args.captures])

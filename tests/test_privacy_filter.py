@@ -122,8 +122,20 @@ class TestOnnxTokenAggregation:
         spans = _aggregate_tokens(
             [
                 {"prefix": "B", "entity": "PERSON", "start": 0, "end": 5, "score": 0.9},
-                {"prefix": "E", "entity": "PERSON", "start": 6, "end": 11, "score": 0.8},
-                {"prefix": "S", "entity": "PERSON", "start": 16, "end": 19, "score": 0.7},
+                {
+                    "prefix": "E",
+                    "entity": "PERSON",
+                    "start": 6,
+                    "end": 11,
+                    "score": 0.8,
+                },
+                {
+                    "prefix": "S",
+                    "entity": "PERSON",
+                    "start": 16,
+                    "end": 19,
+                    "score": 0.7,
+                },
             ],
             text,
         )
@@ -150,7 +162,13 @@ class TestOnnxTokenAggregation:
         spans = _aggregate_tokens(
             [
                 {"prefix": "B", "entity": "PERSON", "start": 0, "end": 5, "score": 0.9},
-                {"prefix": "B", "entity": "LOCATION", "start": 9, "end": 14, "score": 0.8},
+                {
+                    "prefix": "B",
+                    "entity": "LOCATION",
+                    "start": 9,
+                    "end": 14,
+                    "score": 0.8,
+                },
             ],
             text,
         )

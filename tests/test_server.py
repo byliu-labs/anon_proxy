@@ -382,17 +382,15 @@ class TestProxyMaskingConcurrency:
                 transport=transport, base_url="http://testserver"
             ) as client:
                 t0 = time.perf_counter()
-                r1, r2 = await asyncio.gather(
-                    post_messages(client),
-                    post_messages(client),
-                )
+                request_task = asyncio.create_task(post_messages(client))
+                await asyncio.sleep(0.05)
+                loop_delay = time.perf_counter() - t0
+                response = await request_task
                 elapsed = time.perf_counter() - t0
 
-        assert r1.status_code == 200
-        assert r2.status_code == 200
-        assert elapsed < 0.35, (
-            f"requests serialized on the event loop: {elapsed:.2f}s"
-        )
+        assert response.status_code == 200
+        assert loop_delay < 0.15, f"masking blocked the event loop: {loop_delay:.2f}s"
+        assert elapsed >= 0.2
 
 
 class TestCaptureDetectorTelemetry:
