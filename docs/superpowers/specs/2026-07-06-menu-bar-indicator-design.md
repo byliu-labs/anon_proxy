@@ -137,9 +137,33 @@ The menu bar icon is a running dinosaur; gait speed ∝ `tokens_per_sec`.
 | **Alarm (latched)** | hits a cactus, turns red | `masking_errors_total` increased; stays until user resets |
 | Down | dim / "zzz" | status poll failed (connection refused) |
 
-Frame set + speed→FPS mapping are approved via an interactive HTML prototype
-(`docs/superpowers/prototypes/dino/`) before implementation; approved frames are
-exported to menu-bar template PNGs.
+Speed→FPS mapping (`1.5 + tokens_per_sec/28`, capped) is approved via the
+interactive HTML prototype
+(`docs/superpowers/prototypes/dino/index.html`). The prototype's hand-authored
+sprite is a **placeholder** — implementation uses an authentic Chrome T-rex
+sprite (the placeholder reads as a duck: neck too long, head wrong). Frames
+needed per theme: `stand`, `run1`, `run2`, `dead`; plus an obstacle (`cactus`)
+for the alarm.
+
+### Theming / holiday skins
+
+Like Google's Chrome Dino holiday easter eggs, the dino is **themeable**.
+
+- A theme is a folder of frame PNGs (`stand/run1/run2/dead/cactus`) under
+  `anon_proxy/assets/dino/<theme>/`, registered in a small `THEMES` table.
+- `classic` is the default (authentic gray T-rex).
+- Holiday themes (e.g. `halloween` pumpkin dino, `winter` santa-hat dino,
+  `newyear`) are selected automatically by date via a `holiday_for(date)`
+  calendar function, with a **manual override** in a menu `Theme ▸` submenu
+  (`Auto`, `Classic`, `Halloween`, …). Selection persists in a tiny config
+  file (`~/.config/anon-proxy/menubar.json`).
+- Menu bar rendering: themed/colored frames use a non-template `NSImage` (so
+  color shows); `classic` may use a template image (auto-adapts to light/dark
+  menu bar). The renderer picks per theme.
+- Adding a holiday later = drop a frame folder + one `THEMES`/calendar entry;
+  no code changes to the animation or polling loop. `holiday_for` and the theme
+  registry are pure and unit-tested; missing/partial theme assets fall back to
+  `classic` (never a blank icon).
 
 Dropdown detail:
 ```
@@ -154,6 +178,7 @@ Dropdown detail:
   ─────────
   Open status JSON · Copy base URL
   Start / Stop / Restart proxy
+  Theme ▸  (Auto · Classic · Halloween · Winter · …)
   Start at login  ✓
   Quit menu bar
 ```
@@ -180,7 +205,9 @@ is never silently missed.
 
 - Unit: `ProxyMetrics` increments (every counter incl. error path, EWMA math);
   `classify_client` over a table of real user-agent/header fixtures;
-  `render(status_json)` → icon state + labels for idle/active/alarm/down.
+  `render(status_json)` → icon state + labels for idle/active/alarm/down;
+  `holiday_for(date)` over a fixture calendar; theme registry falls back to
+  `classic` on missing assets.
 - Integration: `/_status` via `TestClient` — shape correct; counts move after a
   masked request; `masking_errors_total` bumps when the masker raises;
   `tokens_out_total` moves for both usage-reported and fallback paths.
