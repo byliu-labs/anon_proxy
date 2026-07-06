@@ -66,7 +66,9 @@ def launch_agent_plist(
 
 
 def _plist_path(label: str, plist_dir: Path | None) -> Path:
-    base = plist_dir if plist_dir is not None else Path.home() / "Library" / "LaunchAgents"
+    base = (
+        plist_dir if plist_dir is not None else Path.home() / "Library" / "LaunchAgents"
+    )
     return base / f"{label}.plist"
 
 

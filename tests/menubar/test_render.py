@@ -50,7 +50,9 @@ def test_running_when_throughput_positive():
 
 
 def test_alarm_overrides_running():
-    state = render(_status(tokens_per_sec=380.0, masking_errors_total=2), alarm=True, now=1.0)
+    state = render(
+        _status(tokens_per_sec=380.0, masking_errors_total=2), alarm=True, now=1.0
+    )
     assert state.icon_state == "alarm"
     assert any("2" in line and "error" in line.lower() for line in state.menu)
 

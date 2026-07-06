@@ -94,8 +94,7 @@ def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
             self.menu.clear()
             self._theme_items = {}
             self._status_items = [
-                rumps.MenuItem(f"status {idx}", callback=None)
-                for idx in range(5)
+                rumps.MenuItem(f"status {idx}", callback=None) for idx in range(5)
             ]
             for item in self._status_items:
                 self.menu.add(item)
@@ -113,7 +112,9 @@ def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
             self.menu.add(rumps.MenuItem("Stop proxy", callback=self._stop_proxy))
             self.menu.add(rumps.MenuItem("Restart proxy", callback=self._restart_proxy))
             self.menu.add(None)
-            item = rumps.MenuItem("Start at login", callback=self._toggle_start_at_login)
+            item = rumps.MenuItem(
+                "Start at login", callback=self._toggle_start_at_login
+            )
             item.state = 1 if self._cfg["start_at_login"] else 0
             self._start_at_login_item = item
             self.menu.add(item)
