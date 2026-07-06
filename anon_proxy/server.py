@@ -35,7 +35,7 @@ from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.adapters import openai as openai_adapter
 from anon_proxy.capture import Capturer
 from anon_proxy.config import Config, load_config
-from anon_proxy.mapping import PIIStore
+from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker, telemetry_scope
 from anon_proxy.privacy_filter import PrivacyFilter
 from anon_proxy.regex_detector import RegexDetector
@@ -657,18 +657,6 @@ async def _handle_proxy(
     )
 
 
-def _write_store_json(path: str, data: dict) -> None:
-    """Atomically write serialized store data to *path*.
-
-    Runs in a thread pool — *data* is a snapshot captured on the event loop,
-    so concurrent store mutations during the write are harmless.
-    """
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
-
-
 async def _maybe_save_store(app_state, store_before: int) -> None:
     """Write the PII store to disk if it was modified this request.
 
@@ -681,7 +669,7 @@ async def _maybe_save_store(app_state, store_before: int) -> None:
     if len(masker.store) > store_before:
         data = masker.store.to_dict()
         try:
-            await asyncio.to_thread(_write_store_json, store_path, data)
+            await asyncio.to_thread(atomic_write_json, store_path, data)
         except OSError as e:
             print(f"error: failed to save PII store: {e}", file=sys.stderr)
 
