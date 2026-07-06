@@ -1,3 +1,5 @@
+import json
+import os
 import re
 from dataclasses import dataclass
 
@@ -48,6 +50,38 @@ class PIIStore:
     def __len__(self) -> int:
         return len(self._reverse)
 
+    def to_dict(self) -> dict:
+        return {
+            "reverse": dict(self._reverse),
+            "counters": dict(self._counters),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PIIStore":
+        store = cls()
+        store._reverse = dict(data["reverse"])
+        store._counters = dict(data["counters"])
+        for token, original in store._reverse.items():
+            parsed = _parse_token(token)
+            if parsed is None:
+                continue
+            label, index = parsed
+            key = (label, _canonical(original))
+            store._forward[key] = Placeholder(label=label, index=index, token=token)
+        return store
+
+    def save(self, path: str) -> None:
+        atomic_write_json(path, self.to_dict())
+
+    @classmethod
+    def load(cls, path: str) -> "PIIStore":
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{path}: invalid JSON: {e}") from e
+        return cls.from_dict(data)
+
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -59,3 +93,20 @@ def _canonical(value: str) -> str:
 def _placeholder_label(label: str) -> str:
     trimmed = label[len("private_") :] if label.startswith("private_") else label
     return trimmed.upper()
+
+
+_TOKEN_PARSE_RE = re.compile(r"<([A-Z][A-Z0-9_]*)_(\d+)>")
+
+
+def _parse_token(token: str) -> tuple[str, int] | None:
+    match = _TOKEN_PARSE_RE.fullmatch(token)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def atomic_write_json(path: str, data: dict) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)

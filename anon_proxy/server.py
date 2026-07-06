@@ -14,6 +14,7 @@ Client auth headers are forwarded verbatim and never stored.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -28,6 +29,7 @@ from starlette.routing import Mount, Route
 
 from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.adapters import openai as openai_adapter
+from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker
 from anon_proxy.privacy_filter import PrivacyFilter, load_merge_gap
 from anon_proxy.regex_detector import RegexDetector, load_patterns
@@ -173,6 +175,7 @@ def build_app(
     masker: Masker | None = None,
     extra_upstreams: dict[str, UpstreamConfig] | None = None,
     debug: bool = False,
+    store_path: str | None = None,
 ) -> Starlette:
     """Build the Starlette application.
 
@@ -180,6 +183,7 @@ def build_app(
         masker: PII masker instance (created if None)
         extra_upstreams: Additional upstream providers configured via CLI
         debug: Enable debug logging
+        store_path: Persistent store path to save after new mappings.
     """
     masker = masker or Masker()
     all_upstreams = {**BUILT_IN_UPSTREAMS, **(extra_upstreams or {})}
@@ -191,6 +195,7 @@ def build_app(
             app.state.masker = masker
             app.state.debug = debug
             app.state.upstreams = all_upstreams
+            app.state.store_path = store_path
             yield
 
     async def dispatch(request: Request) -> Response:
@@ -329,6 +334,7 @@ async def _handle_proxy(
             finally:
                 if debug:
                     _log_stream_summary("".join(upstream_buf), "".join(client_buf))
+                await _maybe_save_store(request.app.state, store_before)
                 await upstream_resp.aclose()
 
         return StreamingResponse(
@@ -356,6 +362,7 @@ async def _handle_proxy(
             unmasked = adapter.unmask_response(resp_json, masker)
             if debug:
                 _log_response(resp_json, unmasked)
+            await _maybe_save_store(request.app.state, store_before)
             return Response(
                 content=json.dumps(unmasked),
                 status_code=upstream_resp.status_code,
@@ -363,12 +370,26 @@ async def _handle_proxy(
                 media_type="application/json",
             )
 
+    await _maybe_save_store(request.app.state, store_before)
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
         headers=_filter_response_headers(upstream_resp.headers),
         media_type=content_type or None,
     )
+
+
+async def _maybe_save_store(app_state, store_before: int) -> None:
+    store_path: str | None = getattr(app_state, "store_path", None)
+    if store_path is None:
+        return
+    masker: Masker = app_state.masker
+    if len(masker.store) <= store_before:
+        return
+    try:
+        await asyncio.to_thread(atomic_write_json, store_path, masker.store.to_dict())
+    except OSError as e:
+        print(f"error: failed to save PII store: {e}", file=sys.stderr)
 
 
 def _should_mask_request(path: str, body: dict) -> bool:
@@ -511,6 +532,11 @@ def main() -> None:
         help="Add an extra upstream provider. Repeatable. "
              "Example: --extra-upstream myprovider=https://api.example.com;adapter=openai",
     )
+    parser.add_argument(
+        "--store",
+        default=os.environ.get("ANON_PROXY_STORE"),
+        help="Persistent PII mapping store. Loaded at startup and saved after new mappings.",
+    )
     args = parser.parse_args()
 
     # Parse extra upstreams
@@ -548,13 +574,30 @@ def main() -> None:
             device=device,
         )
 
+    store = None
+    if args.store:
+        try:
+            store = PIIStore.load(args.store)
+            print(f"  store: loaded {len(store)} entries from {args.store}", file=sys.stderr)
+        except FileNotFoundError:
+            store = PIIStore()
+            print(f"  store: {args.store} not found, starting fresh", file=sys.stderr)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"error: cannot load PII store from {args.store}: {e}", file=sys.stderr)
+            sys.exit(2)
+
     masker = (
-        Masker(filter=pf, extra_detectors=extra_detectors)
-        if (pf is not None or extra_detectors)
+        Masker(filter=pf, store=store, extra_detectors=extra_detectors)
+        if (pf is not None or store is not None or extra_detectors)
         else None
     )
 
-    app = build_app(masker=masker, extra_upstreams=extra_upstreams, debug=args.debug)
+    app = build_app(
+        masker=masker,
+        extra_upstreams=extra_upstreams,
+        debug=args.debug,
+        store_path=args.store,
+    )
 
     all_providers = sorted({**BUILT_IN_UPSTREAMS, **extra_upstreams}.keys())
     backend_display = f"{args.backend}" if args.backend != "auto" else "auto-detect"
@@ -563,6 +606,7 @@ def main() -> None:
         f"  providers: {', '.join(all_providers)}\n"
         f"  debug: {args.debug}\n"
         f"  patterns: {args.patterns or '(none)'}\n"
+        f"  store: {args.store or '(none)'}\n"
         f"  merge-gap-file: {args.merge_gap_file or '(defaults)'}\n"
         f"  backend: {backend_display}\n"
         f"\nUsage examples:\n"

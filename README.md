@@ -82,6 +82,7 @@ uv run python -m anon_proxy.server [options]
 | `--port` | `8080` | Listen port |
 | `--backend` | `auto` | PII detection backend (`auto`, `cpu`, `mps`, `mlx`) |
 | `--extra-upstream` | — | Add custom provider: `name=url[;adapter=anthropic\|openai][;path_prefix=/path]` |
+| `--store <file>` | — | Persistent PII mapping store. Loaded at startup and saved after each request with new entries. |
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
 | `--patterns <file>` | — | JSON file of extra regex detectors: `{"LABEL": "regex", ...}` |
 | `--merge-gap-file <file>` | — | JSON file overriding per-label adjacency merge chars (see `merge_gap.json.example`) |
@@ -122,6 +123,38 @@ OPENAI_API_KEY=sk-... \
 OPENAI_BASE_URL=http://127.0.0.1:8080/openai \
 uv run python test_mask.py --provider openai --no-mask
 ```
+
+---
+
+## Cleaning the store
+
+When you run the proxy with `--store`, mappings are kept in a JSON file so
+placeholders stay stable across restarts. Stop the proxy before editing that
+file; if the proxy is running while you clean it, restart the proxy afterward.
+
+Inspect mappings:
+
+```bash
+uv run anon-proxy-store --store pii-store.json list --label PERSON
+uv run anon-proxy-store --store pii-store.json show '<PERSON_1>'
+```
+
+Remove known-bad mappings:
+
+```bash
+uv run anon-proxy-store --store pii-store.json purge '<PERSON_42>'
+```
+
+Bulk-prune short false-positive person fragments, such as the issue-13 cleanup:
+
+```bash
+uv run anon-proxy-store --store pii-store.json prune --label PERSON --max-len 3 --dry-run
+uv run anon-proxy-store --store pii-store.json prune --label PERSON --max-len 3
+```
+
+`purge` and non-dry-run `prune` write `pii-store.json.bak` before modifying the
+store. Counters are never decremented, so deleted placeholder indexes are not
+reused in old transcripts.
 
 ---
 
