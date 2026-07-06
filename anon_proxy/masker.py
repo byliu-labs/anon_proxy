@@ -3,7 +3,9 @@ import contextvars
 import hashlib
 import json
 import re
+import threading
 import time
+from collections import Counter
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Protocol
 
@@ -35,6 +37,68 @@ def telemetry_scope():
 
 class Detector(Protocol):
     def detect(self, text: str) -> list[PIIEntity]: ...
+
+
+class MaskerStats:
+    """Process-wide counters for masking behavior.
+
+    The public surface is intentionally small: maskers record events, and the
+    server dumps a JSON-safe snapshot at shutdown.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._mask_calls = 0
+        self._mask_cache_hits = 0
+        self._mask_obj_calls = 0
+        self._mask_obj_cache_hits = 0
+        self._entities_by_label: Counter[str] = Counter()
+        self._canary_hits = 0
+        self._unknown_tokens = 0
+
+    def record_mask(
+        self, *, cache_hit: bool, entities_by_label: dict[str, int] | Counter[str]
+    ) -> None:
+        with self._lock:
+            self._mask_calls += 1
+            if cache_hit:
+                self._mask_cache_hits += 1
+            self._entities_by_label.update(entities_by_label)
+            self._canary_hits += entities_by_label.get("CANARY", 0)
+
+    def record_mask_obj(self, *, cache_hit: bool) -> None:
+        with self._lock:
+            self._mask_obj_calls += 1
+            if cache_hit:
+                self._mask_obj_cache_hits += 1
+
+    def record_unknown_tokens(self, *, unknown: int, canary: int) -> None:
+        with self._lock:
+            self._unknown_tokens += unknown
+            self._canary_hits += canary
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            mask_misses = self._mask_calls - self._mask_cache_hits
+            mask_obj_misses = self._mask_obj_calls - self._mask_obj_cache_hits
+            return {
+                "mask_calls": self._mask_calls,
+                "mask_cache_hits": self._mask_cache_hits,
+                "mask_cache_misses": mask_misses,
+                "mask_cache_hit_rate": _rate(self._mask_cache_hits, self._mask_calls),
+                "mask_obj_calls": self._mask_obj_calls,
+                "mask_obj_cache_hits": self._mask_obj_cache_hits,
+                "mask_obj_cache_misses": mask_obj_misses,
+                "mask_obj_cache_hit_rate": _rate(
+                    self._mask_obj_cache_hits, self._mask_obj_calls
+                ),
+                "entities_by_label": dict(sorted(self._entities_by_label.items())),
+                "canary_hits": self._canary_hits,
+                "unknown_tokens": self._unknown_tokens,
+            }
+
+
+PROCESS_MASKER_STATS = MaskerStats()
 
 
 # Patterns for content that should never be masked (non-user PII content)
@@ -77,6 +141,7 @@ class Masker:
         skip_patterns: list[re.Pattern] | None = None,
         ignore_labels: Iterable[str] | None = None,
         cache_size: int = 4096,
+        stats: MaskerStats | None = None,
     ) -> None:
         self._filter = filter if filter is not None else PrivacyFilter()
         self._store = store if store is not None else PIIStore()
@@ -88,6 +153,7 @@ class Masker:
             normalize_label(s) for s in (ignore_labels or ())
         )
         self._cache_size = cache_size
+        self._stats = stats if stats is not None else PROCESS_MASKER_STATS
         # LRU cache: content_hash -> (entities, masked_text)
         self._cache: OrderedDict[str, tuple[list[PIIEntity], str]] = OrderedDict()
         # LRU cache: block_hash -> already-masked block-shaped object
@@ -125,6 +191,10 @@ class Masker:
         content_hash = _hash_content(text)
         if cached := self._cache.get(content_hash):
             self._cache.move_to_end(content_hash)
+            self._stats.record_mask(
+                cache_hit=True,
+                entities_by_label=_entities_by_label(cached[0]),
+            )
             if record is not None:
                 record.append(
                     {
@@ -162,7 +232,12 @@ class Masker:
         ml_entities = _resolve_overlaps(ml_entities)
         masked = self._substitute(intermediate, ml_entities)
 
-        self._cache_result(content_hash, regex_entities + ml_entities, masked)
+        entities = regex_entities + ml_entities
+        self._cache_result(content_hash, entities, masked)
+        self._stats.record_mask(
+            cache_hit=False,
+            entities_by_label=_entities_by_label(entities),
+        )
         if record is not None:
             record.append(
                 {
@@ -220,6 +295,7 @@ class Masker:
         if key in self._block_cache:
             self._block_cache.move_to_end(key)
             cached = self._block_cache[key]
+            self._stats.record_mask_obj(cache_hit=True)
             if record is not None:
                 record.append(
                     {
@@ -234,6 +310,7 @@ class Masker:
         self._block_cache.move_to_end(key)
         while len(self._block_cache) > self._cache_size:
             self._block_cache.popitem(last=False)
+        self._stats.record_mask_obj(cache_hit=False)
         if record is not None:
             record.append(
                 {
@@ -247,6 +324,7 @@ class Masker:
     def unmask(self, text: str) -> str:
         record = _TELEMETRY.get()
         t0 = time.perf_counter() if record is not None else 0.0
+        self._record_unknown_placeholders(text)
         result = self._sub(text, lambda s: s)
         if record is not None:
             record.append(
@@ -268,6 +346,7 @@ class Masker:
         """
         record = _TELEMETRY.get()
         t0 = time.perf_counter() if record is not None else 0.0
+        self._record_unknown_placeholders(text)
         result = self._sub(text, lambda s: json.dumps(s)[1:-1])
         if record is not None:
             record.append(
@@ -278,6 +357,23 @@ class Masker:
                 }
             )
         return result
+
+    @property
+    def stats(self) -> MaskerStats:
+        return self._stats
+
+    def _record_unknown_placeholders(self, text: str) -> None:
+        unknown = 0
+        canary = 0
+        for match in _PLACEHOLDER_RE.finditer(text):
+            token = match.group(0)
+            if self._store.original(token) is not None:
+                continue
+            unknown += 1
+            if _placeholder_label(token) == "CANARY":
+                canary += 1
+        if unknown:
+            self._stats.record_unknown_tokens(unknown=unknown, canary=canary)
 
     def _sub(self, text: str, transform: Callable[[str], str]) -> str:
         """Substitute placeholder tokens with their original values."""
@@ -310,6 +406,22 @@ def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PII
         for e in entities
         if not any(e.start < pe and e.end > ps for ps, pe in placeholders)
     ]
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 0.0
+
+
+def _entities_by_label(entities: list[PIIEntity]) -> Counter[str]:
+    return Counter(normalize_label(e.label) for e in entities)
+
+
+def _placeholder_label(token: str) -> str | None:
+    body = token[1:-1]
+    if "_" not in body:
+        return None
+    label, _index = body.rsplit("_", 1)
+    return label
 
 
 def _resolve_overlaps(entities: list[PIIEntity]) -> list[PIIEntity]:

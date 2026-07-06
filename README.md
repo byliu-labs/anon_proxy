@@ -285,6 +285,16 @@ With `--debug`, each request prints a compact diff to stderr:
 [unmasked stream] 'I'll fix the bug for <PERSON_1>…' → 'I'll fix the bug for Alice Smith…'
 ```
 
+On shutdown, the proxy writes one structured stats line to stderr:
+
+```text
+[stats] {"canary_hits": 0, "entities_by_label": {"PERSON": 12}, ...}
+```
+
+The stats payload is process-wide and contains counters only: mask/cache hit
+rates, entities by label, canary hits, and unknown placeholder tokens. It does
+not include raw request, response, or detected entity text.
+
 **What gets protected:** every user and assistant message turn — text content, tool call inputs (`tool_use.input`), and tool results (`tool_result.content`). File contents, shell output, names, emails, paths containing PII are all masked before leaving your machine.
 
 **What is NOT masked:** the system prompt (tool schemas and static instructions), tool definitions, and extended-thinking blocks (signatures would break). See [`SECURITY.md`](SECURITY.md) for the full threat model and known limitations.

@@ -36,7 +36,7 @@ from anon_proxy.adapters import openai as openai_adapter
 from anon_proxy.capture import Capturer
 from anon_proxy.config import Config, load_config
 from anon_proxy.mapping import PIIStore
-from anon_proxy.masker import Masker, telemetry_scope
+from anon_proxy.masker import Masker, MaskerStats, PROCESS_MASKER_STATS, telemetry_scope
 from anon_proxy.privacy_filter import PrivacyFilter
 from anon_proxy.regex_detector import RegexDetector
 from anon_proxy.system_prompt import PLACEHOLDER_SYSTEM_PROMPT
@@ -301,6 +301,7 @@ def build_app(
     capture: Capturer | None = None,
     system_inject: bool = True,
     store_path: str | None = None,
+    stats: MaskerStats | None = None,
 ) -> Starlette:
     """Build the Starlette application.
 
@@ -314,7 +315,8 @@ def build_app(
             to outbound requests so upstream models echo `<LABEL_N>` tokens
             verbatim instead of hallucinating fill-in values
     """
-    masker = masker or Masker()
+    masker = masker or Masker(stats=stats)
+    stats = stats if stats is not None else getattr(masker, "stats", PROCESS_MASKER_STATS)
     all_upstreams = {**BUILT_IN_UPSTREAMS, **(extra_upstreams or {})}
 
     @asynccontextmanager
@@ -335,6 +337,10 @@ def build_app(
             finally:
                 if capture is not None:
                     capture.close()
+                print(
+                    "[stats] " + json.dumps(stats.snapshot(), sort_keys=True),
+                    file=sys.stderr,
+                )
 
     async def dispatch(request: Request) -> Response:
         """Dispatch request based on provider prefix."""

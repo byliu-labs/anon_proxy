@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import re
 
-from anon_proxy.masker import _drop_placeholder_overlaps, _resolve_overlaps
+from anon_proxy.masker import (
+    PROCESS_MASKER_STATS,
+    MaskerStats,
+    _drop_placeholder_overlaps,
+    _resolve_overlaps,
+)
 from anon_proxy.privacy_filter import PIIEntity
 from anon_proxy.regex_detector import RegexDetector
 
@@ -866,6 +871,48 @@ class TestMaskCacheHit:
         m.mask("one")
         m.mask("two")
         assert fake_pipeline.calls == ["one", "two"]
+
+
+class TestMaskerStats:
+    def test_default_maskers_use_process_stats(self, make_filter, store):
+        from anon_proxy.masker import Masker
+
+        m = Masker(filter=make_filter(), store=store, skip_patterns=[])
+
+        assert m.stats is PROCESS_MASKER_STATS
+
+    def test_records_mask_cache_rate_and_entities_by_label(
+        self, make_masker, fake_pipeline
+    ):
+        stats = MaskerStats()
+        m = make_masker(stats=stats)
+        text = "Hello Alice"
+        fake_pipeline.set(text, [span("PERSON", 6, 11, score=0.9)])
+
+        assert m.mask(text) == "Hello <PERSON_1>"
+        assert m.mask(text) == "Hello <PERSON_1>"
+
+        snapshot = stats.snapshot()
+        assert snapshot["mask_calls"] == 2
+        assert snapshot["mask_cache_hits"] == 1
+        assert snapshot["mask_cache_misses"] == 1
+        assert snapshot["mask_cache_hit_rate"] == 0.5
+        assert snapshot["entities_by_label"] == {"PERSON": 2}
+
+    def test_records_unknown_tokens_and_canary_hits(self, make_filter, store):
+        stats = MaskerStats()
+        from anon_proxy.masker import Masker
+
+        m = Masker(filter=make_filter(), store=store, skip_patterns=[], stats=stats)
+        store.get_or_create("PERSON", "Alice")
+
+        assert m.unmask("<PERSON_1> <EMAIL_99> <CANARY_1>") == (
+            "Alice <EMAIL_99> <CANARY_1>"
+        )
+
+        snapshot = stats.snapshot()
+        assert snapshot["unknown_tokens"] == 2
+        assert snapshot["canary_hits"] == 1
 
 
 class TestMaskCacheLruEviction:

@@ -8,6 +8,7 @@ Covered:
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,12 +17,14 @@ import httpx
 import pytest
 
 from anon_proxy.mapping import PIIStore
+from anon_proxy.masker import MaskerStats
 from anon_proxy.server import (
     _extract_usage,
     _maybe_save_store,
     _should_mask_request,
     _upstream_request,
     _write_store_json,
+    build_app,
 )
 
 
@@ -265,6 +268,25 @@ class TestUpstreamRequest:
             headers={"Authorization": "Bearer xyz"},
             params={"page": "1"},
         )
+
+
+class TestStatsShutdown:
+    @pytest.mark.anyio
+    async def test_lifespan_dumps_one_stats_json_line(self, capsys):
+        stats = MaskerStats()
+        stats.record_mask(cache_hit=False, entities_by_label={"PERSON": 1})
+
+        app = build_app(masker=SimpleNamespace(store=PIIStore()), stats=stats)
+
+        async with app.router.lifespan_context(app):
+            pass
+
+        err = capsys.readouterr().err
+        lines = [line for line in err.splitlines() if line.startswith("[stats] ")]
+        assert len(lines) == 1
+        payload = json.loads(lines[0][len("[stats] ") :])
+        assert payload["mask_calls"] == 1
+        assert payload["entities_by_label"] == {"PERSON": 1}
 
 
 class TestExtractUsage:
