@@ -3,6 +3,7 @@ import contextvars
 import hashlib
 import json
 import re
+import threading
 import time
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Protocol
@@ -22,7 +23,9 @@ def telemetry_scope():
     """Collect per-call masker telemetry into a fresh list for the current task.
 
     Each entry: {"op": "mask"|"unmask"|"unmask_json", "chars": int, "ms": float,
-    "cache_hit": bool (mask only), "skipped": bool (mask, optional)}.
+    "cache_hit": bool (mask only), "skipped": bool (mask, optional),
+    "entities": [{"label": str, "score": float, "len": int, "source": str}, ...]
+    (mask only)}. Entity telemetry deliberately excludes matched text.
     Safe under concurrent asyncio tasks — each task gets its own list via contextvars.
     """
     record: list = []
@@ -47,6 +50,7 @@ _SKIP_MASK_PATTERNS = [
 
 # Matches placeholder tokens emitted by PIIStore (see mapping.py: f"<{LABEL}_{N}>").
 _PLACEHOLDER_RE = re.compile(r"<[A-Z][A-Z0-9_]*_\d+>")
+_CACHE_MISS = object()
 
 
 class Masker:
@@ -88,8 +92,11 @@ class Masker:
             normalize_label(s) for s in (ignore_labels or ())
         )
         self._cache_size = cache_size
-        # LRU cache: content_hash -> (entities, masked_text)
-        self._cache: OrderedDict[str, tuple[list[PIIEntity], str]] = OrderedDict()
+        self._cache_lock = threading.RLock()
+        # LRU cache: content_hash -> (safe entity telemetry, masked_text)
+        self._cache: OrderedDict[str, tuple[list[dict[str, Any]], str]] = (
+            OrderedDict()
+        )
         # LRU cache: block_hash -> already-masked block-shaped object
         self._block_cache: OrderedDict[str, Any] = OrderedDict()
 
@@ -123,8 +130,11 @@ class Masker:
 
         # Check cache
         content_hash = _hash_content(text)
-        if cached := self._cache.get(content_hash):
-            self._cache.move_to_end(content_hash)
+        with self._cache_lock:
+            cached = self._cache.get(content_hash)
+            if cached is not None:
+                self._cache.move_to_end(content_hash)
+        if cached is not None:
             if record is not None:
                 record.append(
                     {
@@ -132,6 +142,7 @@ class Masker:
                         "chars": len(text),
                         "ms": (time.perf_counter() - t0) * 1000,
                         "cache_hit": True,
+                        "entities": list(cached[0]),
                     }
                 )
             return cached[1]
@@ -144,6 +155,7 @@ class Masker:
         for detector in self._extra:
             regex_entities.extend(detector.detect(text))
         regex_entities = _resolve_overlaps(regex_entities)
+        regex_telemetry = _entity_telemetry(regex_entities, source="regex")
         intermediate = self._substitute(text, regex_entities)
 
         # Pass 2: ML model on the regex-masked text. Defensively drop any span
@@ -160,9 +172,14 @@ class Masker:
                 if normalize_label(e.label) not in self._ignore_labels
             ]
         ml_entities = _resolve_overlaps(ml_entities)
+        ml_telemetry = _entity_telemetry(ml_entities, source="ml")
         masked = self._substitute(intermediate, ml_entities)
 
-        self._cache_result(content_hash, regex_entities + ml_entities, masked)
+        # Detection may race for the same uncached text. That is harmless:
+        # PIIStore allocation is idempotent, and both threads write the same
+        # content-hash cache entry.
+        entities = regex_telemetry + ml_telemetry
+        self._cache_result(content_hash, entities, masked)
         if record is not None:
             record.append(
                 {
@@ -170,18 +187,20 @@ class Masker:
                     "chars": len(text),
                     "ms": (time.perf_counter() - t0) * 1000,
                     "cache_hit": False,
+                    "entities": entities,
                 }
             )
         return masked
 
     def _cache_result(
-        self, content_hash: str, entities: list[PIIEntity], masked: str
+        self, content_hash: str, entities: list[dict[str, Any]], masked: str
     ) -> None:
         """Cache a detection result with LRU eviction."""
-        self._cache[content_hash] = (entities, masked)
-        self._cache.move_to_end(content_hash)
-        while len(self._cache) > self._cache_size:
-            self._cache.popitem(last=False)
+        with self._cache_lock:
+            self._cache[content_hash] = (list(entities), masked)
+            self._cache.move_to_end(content_hash)
+            while len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
 
     def _substitute(self, text: str, entities: list[PIIEntity]) -> str:
         """Replace entities with placeholder tokens.
@@ -217,9 +236,11 @@ class Masker:
             return walker(obj)
         record = _TELEMETRY.get()
         t0 = time.perf_counter() if record is not None else 0.0
-        if key in self._block_cache:
-            self._block_cache.move_to_end(key)
-            cached = self._block_cache[key]
+        with self._cache_lock:
+            cached = self._block_cache.get(key, _CACHE_MISS)
+            if cached is not _CACHE_MISS:
+                self._block_cache.move_to_end(key)
+        if cached is not _CACHE_MISS:
             if record is not None:
                 record.append(
                     {
@@ -230,10 +251,11 @@ class Masker:
                 )
             return cached
         result = walker(obj)
-        self._block_cache[key] = result
-        self._block_cache.move_to_end(key)
-        while len(self._block_cache) > self._cache_size:
-            self._block_cache.popitem(last=False)
+        with self._cache_lock:
+            self._block_cache[key] = result
+            self._block_cache.move_to_end(key)
+            while len(self._block_cache) > self._cache_size:
+                self._block_cache.popitem(last=False)
         if record is not None:
             record.append(
                 {
@@ -309,6 +331,19 @@ def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PII
         e
         for e in entities
         if not any(e.start < pe and e.end > ps for ps, pe in placeholders)
+    ]
+
+
+def _entity_telemetry(entities: list[PIIEntity], *, source: str) -> list[dict[str, Any]]:
+    """Return safe per-entity telemetry without matched text."""
+    return [
+        {
+            "label": normalize_label(e.label),
+            "score": float(e.score),
+            "len": e.end - e.start,
+            "source": source,
+        }
+        for e in entities
     ]
 
 

@@ -37,6 +37,7 @@ from prompt_toolkit import ANSI, PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 
 from anon_proxy import Config, Masker, PrivacyFilter, RegexDetector, load_config
+from anon_proxy.privacy_filter import DEFAULT_CHUNK_SIZE
 from anon_proxy.system_prompt import PLACEHOLDER_SYSTEM_PROMPT
 
 
@@ -135,9 +136,9 @@ def main() -> int:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=1500,
+        default=DEFAULT_CHUNK_SIZE,
         metavar="N",
-        help="Max characters per chunk fed to the model (default: 1500).",
+        help=f"Max characters per chunk fed to the model (default: {DEFAULT_CHUNK_SIZE}).",
     )
     args = parser.parse_args()
 
@@ -178,7 +179,7 @@ def main() -> int:
                 print(f"{RED}error:{RESET} {e}", file=sys.stderr)
                 return 2
         pf: PrivacyFilter | None = None
-        if cfg.merge_gap or args.chunk_size != 1500:
+        if cfg.merge_gap or args.chunk_size != DEFAULT_CHUNK_SIZE:
             pf = PrivacyFilter(
                 merge_gap_allowed=cfg.merge_gap or None,
                 chunk_size=args.chunk_size,

@@ -88,12 +88,12 @@ claude[1]> Sure <PERSON_1>, here's the summary of the note from <EMAIL_1>: ...
 
 - Python ≥ 3.10 (use [uv](https://docs.astral.sh/uv/))
 - CUDA GPU recommended (≥4 GB VRAM); CPU works but is slower
-- Apple Silicon (M1/M2/M3/M4) supported via MPS or MLX backends
+- Apple Silicon (M1/M2/M3/M4) supported via the MPS backend
 - `ANTHROPIC_API_KEY` for `test_mask.py`; the proxy itself forwards client auth — no key needed on the server
 
 ```bash
 uv sync        # install dependencies
-uv sync --extra mlx  # optional: Apple Silicon MLX support
+uv sync --extra onnx  # optional: ONNX Runtime backend
 ```
 
 **Dependencies:** `torch`, `transformers` (local PII model), `starlette` + `uvicorn` (proxy server), `httpx` (upstream client), `anthropic` + `prompt-toolkit` (demo scripts).
@@ -110,12 +110,16 @@ uv run python -m anon_proxy.server [options]
 |---|---|---|
 | `--host` | `127.0.0.1` | Bind address (`0.0.0.0` to expose on LAN) |
 | `--port` | `8080` | Listen port |
-| `--backend` | `auto` | PII detection backend (`auto`, `cpu`, `mps`, `mlx`) |
+| `--backend` | `auto` | PII detection backend (`auto`, `cpu`, `mps`, `onnx`) |
+| `--onnx-provider` | `CPUExecutionProvider` | ONNX Runtime execution provider used with `--backend onnx` |
 | `--extra-upstream` | — | Add custom provider: `name=url[;adapter=anthropic\|openai][;path_prefix=/path]` |
 | `--store <file>` | — | Path to persistent PII mapping store. Loaded at startup; saved after each request with new entries. Enables cross-restart placeholder consistency — see [Persistent store](#persistent-store) below. |
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
+| `--metrics` | off | Log per-turn latency metrics to stderr |
+| `--capture <file>` | — | Append sensitive local JSONL captures for offline analysis. Capture files contain raw PII; keep them local. |
 | `--config <file>` | — | Unified `config.json` (extra regex patterns, per-label merge-gap overrides, ML labels to skip masking on). See [Config file](#config-file) below. |
-| `--chunk-size <N>` | `1500` | Max chars per model inference pass — lower values reduce peak VRAM |
+| `--chunk-size <N>` | `6000` | Max chars per model inference chunk — lower values reduce peak VRAM |
+| `--batch-size <N>` | `8` | Batch size for model inference over chunks |
 | `--no-system-inject` | off | Disable the placeholder-explainer system prompt that the proxy prepends to outbound requests. Also settable via `system_inject: false` in `config.json`. |
 
 **Add a custom provider:**
@@ -133,6 +137,16 @@ uv run python -m anon_proxy.server \
   --backend mps \
   --debug
 ```
+
+**With ONNX Runtime:**
+```bash
+uv sync --extra onnx
+uv run python -m anon_proxy.server --backend onnx
+```
+
+The ONNX backend loads the upstream `openai/privacy-filter` ONNX export through
+the same token-classification pipeline interface as the default torch backend,
+so chunking, masking, and merge behavior remain shared.
 
 ### Config file
 
@@ -198,6 +212,27 @@ The store is a flat JSON file — human-readable, easy to inspect, backup, or pr
 Writes are atomic (written to a `.tmp` file, then renamed) and offloaded to a thread pool so they never block the event loop. If a write fails (disk full, permissions), the error is logged to stderr and the request completes normally — the mapping survives in memory and will be retried on the next write.
 
 Also settable via `ANON_PROXY_STORE` environment variable.
+
+Inspect or clean a store with `anon-proxy-store` after stopping the proxy:
+
+```bash
+uv run anon-proxy-store --store /data/pii_store.json list --label PERSON
+uv run anon-proxy-store --store /data/pii_store.json show '<PERSON_1>'
+uv run anon-proxy-store --store /data/pii_store.json purge '<PERSON_42>'
+```
+
+Bulk-prune short false-positive fragments with a dry run first:
+
+```bash
+uv run anon-proxy-store --store /data/pii_store.json prune --label PERSON --max-len 3 --dry-run
+uv run anon-proxy-store --store /data/pii_store.json prune --label PERSON --max-len 3
+```
+
+`purge` and non-dry-run `prune` write `/data/pii_store.json.bak` before
+modifying the store. Counters are never decremented, so deleted placeholder
+indexes are not reused in old transcripts. `prune` requires at least one filter
+or an explicit `--all`; this prevents an accidental bare prune from selecting
+the entire store.
 
 ## Docker
 
@@ -290,6 +325,20 @@ With `--debug`, each request prints a compact diff to stderr:
 **What is NOT masked:** the system prompt (tool schemas and static instructions), tool definitions, and extended-thinking blocks (signatures would break). See [`SECURITY.md`](SECURITY.md) for the full threat model and known limitations.
 
 **How it works:** PII spans get stable placeholder tokens (`<PERSON_1>`, `<EMAIL_1>`, `<ADDRESS_1>`, …) stored in an in-memory mapping. The same value always maps to the same token across turns so the model stays coherent. Optionally persist this mapping to disk with `--store` (see [Persistent store](#persistent-store)). Responses are unmasked before reaching your client.
+
+### Capture reports
+
+When `--capture` is enabled, mask telemetry records safe per-entity detector metadata:
+`label`, `score`, `len`, and `source`. It deliberately does not record the matched
+text in detector telemetry. Summarize capture files with:
+
+```bash
+uv run anon-proxy-capture-report /data/capture.jsonl
+uv run anon-proxy-capture-report --json /data/capture.jsonl
+```
+
+The report prints per-label score histograms and source counts without emitting
+request or response text from the capture file.
 
 ---
 

@@ -14,7 +14,7 @@ import sys
 from collections.abc import Sequence
 
 from anon_proxy.config import load_config
-from anon_proxy.privacy_filter import PIIEntity, PrivacyFilter
+from anon_proxy.privacy_filter import DEFAULT_CHUNK_SIZE, PIIEntity, PrivacyFilter
 
 YELLOW = "\033[93m"
 DIM = "\033[2m"
@@ -113,9 +113,9 @@ def main() -> int:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=1500,
+        default=DEFAULT_CHUNK_SIZE,
         metavar="N",
-        help="Max characters per chunk fed to the model (default: 1500). "
+        help=f"Max characters per chunk fed to the model (default: {DEFAULT_CHUNK_SIZE}). "
         "Lower values reduce peak GPU memory at the cost of more passes.",
     )
     parser.add_argument(

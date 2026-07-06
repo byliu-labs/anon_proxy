@@ -1,5 +1,8 @@
+import threading
 from dataclasses import dataclass
+from typing import Literal
 
+import numpy as np
 from transformers import pipeline
 
 
@@ -28,6 +31,12 @@ DEFAULT_MERGE_GAP_ALLOWED: dict[str, str] = {
     "LOCATION": " \t\n,.-",
 }
 
+DEFAULT_CHUNK_SIZE = 6000
+DEFAULT_ONNX_FILE = "onnx/model_q4f16.onnx"
+DEFAULT_ONNX_DATA_FILES = ("onnx/model_q4f16.onnx_data",)
+DEFAULT_ONNX_PROVIDER = "CPUExecutionProvider"
+Backend = Literal["auto", "torch", "cpu", "mps", "onnx"]
+
 
 class PrivacyFilter:
     """Thin wrapper around the openai/privacy-filter token classifier.
@@ -47,11 +56,11 @@ class PrivacyFilter:
     merge across an empty gap.
 
     Long texts are split into overlapping-free chunks of at most `chunk_size`
-    characters (default 1500, ~375 English tokens — safely within BERT's 512
-    token limit). Splits happen at the last whitespace before the boundary so
-    words are never bisected. Entity spans from adjacent chunks are combined
-    before the adjacency-merge pass, so entities that straddle a chunk boundary
-    are still collapsed into a single placeholder.
+    characters (default 6000, roughly 1500 English tokens). Splits happen at
+    the last whitespace before the boundary so words are never bisected.
+    Chunks are submitted to the pipeline as one batch. Entity spans from
+    adjacent chunks are combined before the adjacency-merge pass, so entities
+    that straddle a chunk boundary are still collapsed into a single placeholder.
     """
 
     MODEL_ID = "openai/privacy-filter"
@@ -62,14 +71,18 @@ class PrivacyFilter:
         aggregation_strategy: str = "simple",
         merge_adjacent: bool = True,
         merge_gap_allowed: dict[str, str] | None = None,
-        chunk_size: int = 1500,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        batch_size: int = 8,
         device: int | str | None = None,
+        backend: Backend = "auto",
+        onnx_provider: str = DEFAULT_ONNX_PROVIDER,
     ) -> None:
-        self._pipe = pipeline(
-            task="token-classification",
-            model=self.MODEL_ID,
+        self._pipe = _build_pipeline(
+            model_id=self.MODEL_ID,
             aggregation_strategy=aggregation_strategy,
+            backend=backend,
             device=device,
+            onnx_provider=onnx_provider,
         )
         self._merge_adjacent = merge_adjacent
         merged_policy = {**DEFAULT_MERGE_GAP_ALLOWED, **(merge_gap_allowed or {})}
@@ -77,14 +90,19 @@ class PrivacyFilter:
             label: frozenset(chars) for label, chars in merged_policy.items()
         }
         self._chunk_size = chunk_size
+        self._batch_size = batch_size
+        self._infer_lock = threading.Lock()
 
     def detect(self, text: str) -> list[PIIEntity]:
         if not text.strip():
             return []
         chunks = _split_chunks(text, self._chunk_size)
+        texts = [chunk for _, chunk in chunks]
+        with self._infer_lock:
+            all_results = self._pipe(texts, batch_size=self._batch_size)
         entities: list[PIIEntity] = []
-        for offset, chunk in chunks:
-            for r in self._pipe(chunk):
+        for (offset, chunk), results in zip(chunks, all_results):
+            for r in results:
                 e = _to_entity(r, chunk)
                 if e is None:
                     continue
@@ -103,7 +121,163 @@ class PrivacyFilter:
 
     def detect_raw(self, text: str) -> list[dict]:
         """Return the pipeline's untouched per-span dicts for debugging."""
-        return list(self._pipe(text))
+        with self._infer_lock:
+            return list(self._pipe(text))
+
+
+def _build_pipeline(
+    *,
+    model_id: str,
+    aggregation_strategy: str,
+    backend: Backend,
+    device: int | str | None,
+    onnx_provider: str,
+):
+    if backend in ("auto", "torch"):
+        return pipeline(
+            task="token-classification",
+            model=model_id,
+            aggregation_strategy=aggregation_strategy,
+            device=device,
+        )
+    if backend in ("cpu", "mps"):
+        if device is None:
+            device = backend
+        return pipeline(
+            task="token-classification",
+            model=model_id,
+            aggregation_strategy=aggregation_strategy,
+            device=device,
+        )
+    if backend == "onnx":
+        return _load_onnx_model(provider=onnx_provider)
+    allowed = "auto, torch, cpu, mps, onnx"
+    raise ValueError(f"unsupported privacy filter backend {backend!r}; expected {allowed}")
+
+
+def _load_onnx_model(*, provider: str):
+    try:
+        import onnxruntime as ort
+    except ImportError as e:
+        raise RuntimeError(
+            "ONNX backend requires the optional onnx dependencies. "
+            "Install them with `uv sync --extra onnx`."
+        ) from e
+
+    try:
+        from huggingface_hub import hf_hub_download
+        from transformers import AutoConfig, AutoTokenizer
+    except ImportError as e:
+        raise RuntimeError(
+            "transformers and huggingface_hub are required to load the ONNX model"
+        ) from e
+
+    model_path = hf_hub_download(PrivacyFilter.MODEL_ID, filename=DEFAULT_ONNX_FILE)
+    for filename in DEFAULT_ONNX_DATA_FILES:
+        hf_hub_download(PrivacyFilter.MODEL_ID, filename=filename)
+    tokenizer = AutoTokenizer.from_pretrained(PrivacyFilter.MODEL_ID)
+    config = AutoConfig.from_pretrained(PrivacyFilter.MODEL_ID, trust_remote_code=True)
+    session = ort.InferenceSession(model_path, providers=[provider])
+    return _OnnxTokenClassificationPipeline(session, tokenizer, config.id2label)
+
+
+class _OnnxTokenClassificationPipeline:
+    """Pipeline-shaped ONNX Runtime token classifier.
+
+    It returns the subset of HuggingFace token-classification pipeline fields
+    consumed by `_to_entity`: `entity_group`, `start`, `end`, `word`, `score`.
+    """
+
+    def __init__(self, session, tokenizer, id2label: dict[int | str, str]) -> None:
+        self._session = session
+        self._tokenizer = tokenizer
+        self._id2label = {int(k): v for k, v in id2label.items()}
+        self._input_names = {i.name for i in session.get_inputs()}
+
+    def __call__(self, inputs, **_kwargs):
+        if isinstance(inputs, str):
+            return self._detect_one(inputs)
+        return [self._detect_one(text) for text in inputs]
+
+    def _detect_one(self, text: str) -> list[dict]:
+        encoded = self._tokenizer(
+            text,
+            return_offsets_mapping=True,
+            return_tensors="np",
+            truncation=True,
+        )
+        offsets = encoded.pop("offset_mapping")[0].tolist()
+        ort_inputs = {
+            name: encoded[name]
+            for name in self._input_names
+            if name in encoded
+        }
+        logits = self._session.run(None, ort_inputs)[0][0]
+        probabilities = _softmax(logits)
+        label_ids = probabilities.argmax(axis=-1)
+        scores = probabilities.max(axis=-1)
+
+        tokens = []
+        for label_id, score, (start, end) in zip(label_ids, scores, offsets):
+            if start == end:
+                continue
+            label = self._id2label.get(int(label_id), "O")
+            if label == "O":
+                continue
+            prefix, entity = _split_tag(label)
+            tokens.append(
+                {
+                    "prefix": prefix,
+                    "entity": entity,
+                    "start": int(start),
+                    "end": int(end),
+                    "score": float(score),
+                }
+            )
+        return _aggregate_tokens(tokens, text)
+
+
+def _softmax(logits):
+    shifted = logits - np.max(logits, axis=-1, keepdims=True)
+    exp = np.exp(shifted)
+    return exp / np.sum(exp, axis=-1, keepdims=True)
+
+
+def _split_tag(label: str) -> tuple[str, str]:
+    if len(label) > 2 and label[1] == "-" and label[0] in "BIES":
+        return label[0], label[2:]
+    return "B", label
+
+
+def _aggregate_tokens(tokens: list[dict], text: str) -> list[dict]:
+    spans: list[dict] = []
+    current: dict | None = None
+    for token in tokens:
+        starts_new = (
+            current is None
+            or token["prefix"] in ("B", "S")
+            or token["entity"] != current["entity_group"]
+        )
+        if starts_new:
+            if current is not None:
+                spans.append(current)
+            current = {
+                "entity_group": token["entity"],
+                "start": token["start"],
+                "end": token["end"],
+                "score": token["score"],
+            }
+        else:
+            current["end"] = token["end"]
+            current["score"] = min(current["score"], token["score"])
+        if token["prefix"] == "S" and current is not None:
+            spans.append(current)
+            current = None
+    if current is not None:
+        spans.append(current)
+    for span in spans:
+        span["word"] = text[span["start"] : span["end"]]
+    return spans
 
 
 def _split_chunks(text: str, max_chars: int) -> list[tuple[int, str]]:

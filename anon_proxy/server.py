@@ -35,9 +35,9 @@ from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.adapters import openai as openai_adapter
 from anon_proxy.capture import Capturer
 from anon_proxy.config import Config, load_config
-from anon_proxy.mapping import PIIStore
+from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker, telemetry_scope
-from anon_proxy.privacy_filter import PrivacyFilter
+from anon_proxy.privacy_filter import DEFAULT_CHUNK_SIZE, PrivacyFilter
 from anon_proxy.regex_detector import RegexDetector
 from anon_proxy.system_prompt import PLACEHOLDER_SYSTEM_PROMPT
 from anon_proxy.upstream import BUILT_IN_UPSTREAMS, UpstreamConfig, get_upstream_config
@@ -447,11 +447,11 @@ async def _handle_proxy(
     if capture is not None:
         with telemetry_scope() as calls:
             t_mask = time.perf_counter()
-            masked = adapter.mask_request(body, masker)
+            masked = await asyncio.to_thread(adapter.mask_request, body, masker)
             mask_request_ms = (time.perf_counter() - t_mask) * 1000
             mask_calls = list(calls)
     else:
-        masked = adapter.mask_request(body, masker)
+        masked = await asyncio.to_thread(adapter.mask_request, body, masker)
     if debug:
         new_entries = masker.store.items()[store_before:]
         _log_request(upstream_config.name, api_path, body, masked, new_entries)
@@ -657,18 +657,6 @@ async def _handle_proxy(
     )
 
 
-def _write_store_json(path: str, data: dict) -> None:
-    """Atomically write serialized store data to *path*.
-
-    Runs in a thread pool — *data* is a snapshot captured on the event loop,
-    so concurrent store mutations during the write are harmless.
-    """
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
-
-
 async def _maybe_save_store(app_state, store_before: int) -> None:
     """Write the PII store to disk if it was modified this request.
 
@@ -681,7 +669,7 @@ async def _maybe_save_store(app_state, store_before: int) -> None:
     if len(masker.store) > store_before:
         data = masker.store.to_dict()
         try:
-            await asyncio.to_thread(_write_store_json, store_path, data)
+            await asyncio.to_thread(atomic_write_json, store_path, data)
         except OSError as e:
             print(f"error: failed to save PII store: {e}", file=sys.stderr)
 
@@ -782,6 +770,34 @@ def _parse_extra_upstream(spec: str) -> tuple[str, UpstreamConfig]:
     )
 
 
+def _make_privacy_filter(args, cfg: Config) -> PrivacyFilter | None:
+    if args.backend == "mlx":
+        raise ValueError("unsupported backend 'mlx'; use 'mps' or 'onnx'")
+    if (
+        cfg.merge_gap
+        or args.chunk_size != DEFAULT_CHUNK_SIZE
+        or args.batch_size != 8
+        or args.backend != "auto"
+    ):
+        if args.backend == "onnx":
+            return PrivacyFilter(
+                merge_gap_allowed=cfg.merge_gap or None,
+                chunk_size=args.chunk_size,
+                batch_size=args.batch_size,
+                backend="onnx",
+                onnx_provider=args.onnx_provider,
+            )
+        device = None if args.backend == "auto" else args.backend
+        return PrivacyFilter(
+            merge_gap_allowed=cfg.merge_gap or None,
+            chunk_size=args.chunk_size,
+            batch_size=args.batch_size,
+            backend="torch",
+            device=device,
+        )
+    return None
+
+
 def main() -> None:
     import argparse
     import uvicorn
@@ -835,21 +851,29 @@ def main() -> None:
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=int(os.environ.get("ANON_PROXY_CHUNK_SIZE", "1500")),
+        default=int(os.environ.get("ANON_PROXY_CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE))),
         metavar="N",
-        help="Max characters per chunk fed to the model (default: 1500). "
+        help=f"Max characters per chunk fed to the model (default: {DEFAULT_CHUNK_SIZE}). "
         "Lower values reduce peak GPU memory at the cost of more forward passes.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("ANON_PROXY_BATCH_SIZE", "8")),
+        metavar="N",
+        help="Batch size for model inference over chunks (default: 8).",
     )
     parser.add_argument(
         "--backend",
         default=os.environ.get("ANON_PROXY_BACKEND", "auto"),
-        choices=["auto", "cpu", "mps", "mlx"],
+        choices=["auto", "cpu", "mps", "onnx"],
         help="PII detection backend (default: auto-detect best available).",
     )
     parser.add_argument(
-        "--mlx-weights-cache",
-        default=os.environ.get("ANON_PROXY_MLX_WEIGHTS_CACHE"),
-        help="Path to cached MLX-converted weights. Generated on first use if not found.",
+        "--onnx-provider",
+        default=os.environ.get("ANON_PROXY_ONNX_PROVIDER", "CPUExecutionProvider"),
+        help="ONNX Runtime execution provider for --backend onnx "
+        "(default: CPUExecutionProvider).",
     )
     parser.add_argument(
         "--no-system-inject",
@@ -900,14 +924,11 @@ def main() -> None:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(2)
 
-    pf: PrivacyFilter | None = None
-    if cfg.merge_gap or args.chunk_size != 1500 or args.backend != "auto":
-        device = None if args.backend == "auto" else args.backend
-        pf = PrivacyFilter(
-            merge_gap_allowed=cfg.merge_gap or None,
-            chunk_size=args.chunk_size,
-            device=device,
-        )
+    try:
+        pf = _make_privacy_filter(args, cfg)
+    except (RuntimeError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
 
     # Load persistent PII store if requested.
     store_path: str | None = args.store

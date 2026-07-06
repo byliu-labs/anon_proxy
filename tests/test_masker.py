@@ -12,9 +12,14 @@ Sub-phases will accumulate here:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 
-from anon_proxy.masker import _drop_placeholder_overlaps, _resolve_overlaps
+from anon_proxy.masker import (
+    _drop_placeholder_overlaps,
+    _resolve_overlaps,
+    telemetry_scope,
+)
 from anon_proxy.privacy_filter import PIIEntity
 from anon_proxy.regex_detector import RegexDetector
 
@@ -191,7 +196,7 @@ class TestMaskNoOpPath:
     ):
         m = make_masker()
         m.mask("hello world")
-        assert fake_pipeline.calls == ["hello world"]
+        assert fake_pipeline.calls == [["hello world"]]
 
 
 class TestRegexOnlyPath:
@@ -212,7 +217,7 @@ class TestRegexOnlyPath:
         m = make_masker(extra_detectors=[detector])
         text = "Call 555-1212 today"
         m.mask(text)
-        assert fake_pipeline.calls == ["Call <PHONE_1> today"]
+        assert fake_pipeline.calls == [["Call <PHONE_1> today"]]
 
 
 class TestMlOnlyPath:
@@ -252,6 +257,42 @@ class TestRegexAndMlCombined:
         assert len(store) == 1
         assert store.original("<PERSON_1>") == "Alice"
 
+    def test_mask_telemetry_records_safe_entity_metadata(
+        self, make_masker, fake_pipeline
+    ):
+        detector = RegexDetector({"PHONE": r"\d{3}-\d{4}"})
+        m = make_masker(extra_detectors=[detector])
+        text = "Call 555-1212 about Bob"
+        intermediate = "Call <PHONE_1> about Bob"
+        fake_pipeline.set(intermediate, [span("PERSON", 21, 24, score=0.72)])
+
+        with telemetry_scope() as calls:
+            assert m.mask(text) == "Call <PHONE_1> about <PERSON_1>"
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["entities"] == [
+            {"label": "PHONE", "score": 1.0, "len": 8, "source": "regex"},
+            {"label": "PERSON", "score": 0.72, "len": 3, "source": "ml"},
+        ]
+        assert "555-1212" not in repr(mask_call)
+        assert "Bob" not in repr(mask_call)
+
+    def test_cache_hit_replays_safe_entity_metadata(self, make_masker, fake_pipeline):
+        m = make_masker()
+        fake_pipeline.set("Hello Bob", [span("PERSON", 6, 9, score=0.9)])
+
+        with telemetry_scope():
+            assert m.mask("Hello Bob") == "Hello <PERSON_1>"
+        with telemetry_scope() as calls:
+            assert m.mask("Hello Bob") == "Hello <PERSON_1>"
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["cache_hit"] is True
+        assert mask_call["entities"] == [
+            {"label": "PERSON", "score": 0.9, "len": 3, "source": "ml"}
+        ]
+        assert "Bob" not in repr(mask_call)
+
 
 class TestEmptyExtraDetectorsIsTransparent:
     def test_intermediate_equals_original_when_no_regex_hits(
@@ -261,7 +302,7 @@ class TestEmptyExtraDetectorsIsTransparent:
         text = "no digits here"
         m.mask(text)
         # Regex has no matches → intermediate == original; ML sees original.
-        assert fake_pipeline.calls == ["no digits here"]
+        assert fake_pipeline.calls == [["no digits here"]]
 
 
 class TestExtraDetectorsSeeOriginal:
@@ -447,7 +488,7 @@ class TestSkipPatternsCustom:
         # pipeline IS called (proving the skip didn't fire).
         fake_pipeline.set(text, [])
         m.mask(text)
-        assert fake_pipeline.calls == [text]
+        assert fake_pipeline.calls == [[text]]
 
     def test_custom_pattern_triggers_skip(self, make_masker, fake_pipeline):
         m = make_masker(skip_patterns=[re.compile(r"^IGNORE:")])
@@ -463,7 +504,7 @@ class TestSkipPatternsCustom:
         text = "<system-reminder>x</system-reminder>"
         fake_pipeline.set(text, [])
         m.mask(text)
-        assert fake_pipeline.calls == [text]
+        assert fake_pipeline.calls == [[text]]
 
 
 class TestSkipPatternsNotCached:
@@ -855,7 +896,7 @@ class TestMaskCacheHit:
         b = m.mask(text)
         assert a == b
         # Pipeline only called on the first mask; second is a cache hit.
-        assert fake_pipeline.calls == [text]
+        assert fake_pipeline.calls == [[text]]
 
     def test_different_text_invokes_pipeline_each_time(
         self, make_masker, fake_pipeline
@@ -865,7 +906,20 @@ class TestMaskCacheHit:
         fake_pipeline.set("two", [])
         m.mask("one")
         m.mask("two")
-        assert fake_pipeline.calls == ["one", "two"]
+        assert fake_pipeline.calls == [["one"], ["two"]]
+
+    def test_concurrent_mask_same_text_yields_one_placeholder(
+        self, make_masker, fake_pipeline
+    ):
+        m = make_masker()
+        text = "call Alice now"
+        fake_pipeline.set(text, [span("private_person", 5, 10, word="Alice")])
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            results = list(ex.map(lambda _: m.mask(text), range(64)))
+
+        assert len(set(results)) == 1
+        assert results[0] == "call <PERSON_1> now"
 
 
 class TestMaskCacheLruEviction:
@@ -877,7 +931,7 @@ class TestMaskCacheLruEviction:
         # 'a' was evicted when 'c' was inserted; re-masking 'a' calls pipeline.
         m.mask("a")
         # Counts: a, b, c, then a again → 4
-        assert fake_pipeline.calls == ["a", "b", "c", "a"]
+        assert fake_pipeline.calls == [["a"], ["b"], ["c"], ["a"]]
 
 
 class TestPerMaskerContract:
@@ -896,7 +950,7 @@ class TestPerMaskerContract:
         m1.mask(text)
         m2.mask(text)
         # Each Masker called the pipeline independently — caches do not leak.
-        assert fake_pipeline.calls == [text, text]
+        assert fake_pipeline.calls == [[text], [text]]
 
     def test_docstring_documents_per_masker_lifetime(self):
         # Pin via the docstring so a future refactor doesn't silently relax it.

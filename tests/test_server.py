@@ -1,56 +1,65 @@
 """Tests for server-level persistence wiring.
 
 Covered:
-- ``_write_store_json`` — raw file-writing helper (sync, runs in thread pool).
 - ``_maybe_save_store`` — the async gate that decides whether to write and
   offloads I/O to a thread.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from anon_proxy.mapping import PIIStore
+from anon_proxy import server
+from anon_proxy.adapters import anthropic as anthropic_adapter
+from anon_proxy.capture import Capturer
+from anon_proxy.mapping import PIIStore, atomic_write_json
+from anon_proxy.masker import Masker
+from anon_proxy.regex_detector import RegexDetector
 from anon_proxy.server import (
+    DEFAULT_CHUNK_SIZE,
     _extract_usage,
+    _make_privacy_filter,
+    build_app,
     _maybe_save_store,
     _should_mask_request,
     _upstream_request,
-    _write_store_json,
 )
 
 
 # ---------------------------------------------------------------------------
-# _write_store_json (the sync I/O helper)
+# atomic_write_json (the shared sync I/O helper)
 # ---------------------------------------------------------------------------
 
 
-class TestWriteStoreJson:
+class TestAtomicWriteJson:
     def test_writes_valid_store_file(self, tmp_path):
         path = tmp_path / "store.json"
         data = {"reverse": {"<PERSON_1>": "Alice"}, "counters": {"PERSON": 2}}
-        _write_store_json(str(path), data)
+        atomic_write_json(str(path), data)
         assert path.exists()
         loaded = PIIStore.load(str(path))
         assert loaded.original("<PERSON_1>") == "Alice"
 
     def test_tmp_file_cleaned_up(self, tmp_path):
         path = tmp_path / "store.json"
-        _write_store_json(str(path), {"reverse": {}, "counters": {}})
+        atomic_write_json(str(path), {"reverse": {}, "counters": {}})
         assert not (tmp_path / "store.json.tmp").exists()
 
     def test_overwrites_existing_file(self, tmp_path):
         path = tmp_path / "store.json"
-        _write_store_json(
+        atomic_write_json(
             str(path), {"reverse": {"<P_1>": "first"}, "counters": {"P": 2}}
         )
         assert PIIStore.load(str(path)).original("<P_1>") == "first"
-        _write_store_json(
+        atomic_write_json(
             str(path), {"reverse": {"<P_1>": "second"}, "counters": {"P": 2}}
         )
         assert PIIStore.load(str(path)).original("<P_1>") == "second"
@@ -58,7 +67,7 @@ class TestWriteStoreJson:
     def test_non_existent_directory_raises(self, tmp_path):
         path = tmp_path / "missing" / "store.json"
         with pytest.raises(OSError):
-            _write_store_json(str(path), {"reverse": {}, "counters": {}})
+            atomic_write_json(str(path), {"reverse": {}, "counters": {}})
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +146,74 @@ class TestMaybeSaveStore:
             store_before=0,
         )
         # Should not raise
+
+
+# ===========================================================================
+# PrivacyFilter CLI wiring
+# ===========================================================================
+
+
+class TestMakePrivacyFilter:
+    @pytest.fixture(autouse=True)
+    def fake_privacy_filter(self, monkeypatch):
+        class FakePrivacyFilter:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        monkeypatch.setattr(server, "PrivacyFilter", FakePrivacyFilter)
+
+    def test_default_options_defer_to_masker_default_filter(self):
+        args = _state(
+            backend="auto",
+            chunk_size=DEFAULT_CHUNK_SIZE,
+            batch_size=8,
+            onnx_provider="CPUExecutionProvider",
+        )
+        cfg = _state(merge_gap={})
+
+        assert _make_privacy_filter(args, cfg) is None
+
+    def test_onnx_backend_constructs_onnx_filter(self):
+        args = _state(
+            backend="onnx",
+            chunk_size=DEFAULT_CHUNK_SIZE,
+            batch_size=8,
+            onnx_provider="CoreMLExecutionProvider",
+        )
+        cfg = _state(merge_gap={})
+
+        pf = _make_privacy_filter(args, cfg)
+
+        assert pf is not None
+        assert pf.backend == "onnx"
+        assert pf.onnx_provider == "CoreMLExecutionProvider"
+
+    def test_mps_backend_maps_to_torch_device(self):
+        args = _state(
+            backend="mps",
+            chunk_size=DEFAULT_CHUNK_SIZE,
+            batch_size=8,
+            onnx_provider="CPUExecutionProvider",
+        )
+        cfg = _state(merge_gap={})
+
+        pf = _make_privacy_filter(args, cfg)
+
+        assert pf is not None
+        assert pf.backend == "torch"
+        assert pf.device == "mps"
+
+    def test_mlx_backend_is_rejected(self):
+        args = _state(
+            backend="mlx",
+            chunk_size=DEFAULT_CHUNK_SIZE,
+            batch_size=8,
+            onnx_provider="CPUExecutionProvider",
+        )
+        cfg = _state(merge_gap={})
+
+        with pytest.raises(ValueError, match="unsupported backend"):
+            _make_privacy_filter(args, cfg)
 
 
 # ===========================================================================
@@ -265,6 +342,110 @@ class TestUpstreamRequest:
             headers={"Authorization": "Bearer xyz"},
             params={"page": "1"},
         )
+
+
+class TestProxyMaskingConcurrency:
+    @pytest.mark.anyio
+    async def test_event_loop_not_blocked_during_mask(self, monkeypatch):
+        def slow_mask_request(body, masker):
+            time.sleep(0.2)
+            return body
+
+        async def fake_upstream_request(*_args, **_kwargs):
+            response = MagicMock(spec=httpx.Response)
+            response.status_code = 200
+            response.headers = {"content-type": "application/json"}
+            response.json.return_value = {"content": []}
+            return response
+
+        monkeypatch.setattr(anthropic_adapter, "mask_request", slow_mask_request)
+        monkeypatch.setattr(
+            "anon_proxy.server._upstream_request", fake_upstream_request
+        )
+        app = build_app(
+            masker=SimpleNamespace(store=PIIStore(), unmask=lambda text: text),
+            system_inject=False,
+        )
+
+        async def post_messages(client):
+            return await client.post(
+                "/anthropic/v1/messages",
+                json={
+                    "model": "claude-test",
+                    "messages": [{"role": "user", "content": "hello Alice"}],
+                },
+            )
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                t0 = time.perf_counter()
+                r1, r2 = await asyncio.gather(
+                    post_messages(client),
+                    post_messages(client),
+                )
+                elapsed = time.perf_counter() - t0
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert elapsed < 0.35, (
+            f"requests serialized on the event loop: {elapsed:.2f}s"
+        )
+
+
+class TestCaptureDetectorTelemetry:
+    @pytest.mark.anyio
+    async def test_capture_file_contains_safe_per_entity_detector_metadata(
+        self, monkeypatch, tmp_path, make_filter
+    ):
+        async def fake_upstream_request(*_args, **_kwargs):
+            return httpx.Response(
+                200,
+                json={"content": [{"type": "text", "text": "ok"}]},
+                headers={"content-type": "application/json"},
+            )
+
+        monkeypatch.setattr(
+            "anon_proxy.server._upstream_request", fake_upstream_request
+        )
+        capture_path = tmp_path / "capture.jsonl"
+        capturer = Capturer(str(capture_path))
+        masker = Masker(
+            filter=make_filter(),
+            store=PIIStore(),
+            extra_detectors=[RegexDetector({"PHONE": r"\d{3}-\d{4}"})],
+            skip_patterns=[],
+        )
+        app = build_app(masker=masker, capture=capturer, system_inject=False)
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                response = await client.post(
+                    "/anthropic/v1/messages",
+                    json={
+                        "model": "claude-test",
+                        "messages": [
+                            {"role": "user", "content": "Call 555-1212 today"}
+                        ],
+                    },
+                )
+
+        assert response.status_code == 200
+        record = json.loads(capture_path.read_text().splitlines()[0])
+        mask_call = next(
+            call
+            for call in record["timing_ms"]["detector_calls"]
+            if call["op"] == "mask"
+        )
+        assert mask_call["entities"] == [
+            {"label": "PHONE", "score": 1.0, "len": 8, "source": "regex"}
+        ]
+        assert "555-1212" not in json.dumps(mask_call)
 
 
 class TestExtractUsage:

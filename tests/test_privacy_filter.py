@@ -21,6 +21,7 @@ from anon_proxy import privacy_filter
 from anon_proxy.privacy_filter import (
     DEFAULT_MERGE_GAP_ALLOWED,
     PrivacyFilter,
+    _aggregate_tokens,
     _gap_mergeable,
     _split_chunks,
     _tighten,
@@ -113,6 +114,51 @@ class TestGapMergeable:
         assert _gap_mergeable("LABEL", "-", allowed) is True
         assert _gap_mergeable("LABEL", " - ", allowed) is True
         assert _gap_mergeable("LABEL", " x ", allowed) is False  # 'x' not allowed
+
+
+class TestOnnxTokenAggregation:
+    def test_bioes_tokens_collapse_to_pipeline_shaped_spans(self):
+        text = "Alice Smith met Bob"
+        spans = _aggregate_tokens(
+            [
+                {"prefix": "B", "entity": "PERSON", "start": 0, "end": 5, "score": 0.9},
+                {"prefix": "E", "entity": "PERSON", "start": 6, "end": 11, "score": 0.8},
+                {"prefix": "S", "entity": "PERSON", "start": 16, "end": 19, "score": 0.7},
+            ],
+            text,
+        )
+
+        assert spans == [
+            {
+                "entity_group": "PERSON",
+                "start": 0,
+                "end": 11,
+                "score": 0.8,
+                "word": "Alice Smith",
+            },
+            {
+                "entity_group": "PERSON",
+                "start": 16,
+                "end": 19,
+                "score": 0.7,
+                "word": "Bob",
+            },
+        ]
+
+    def test_label_change_starts_new_span_without_special_case(self):
+        text = "Alice in Paris"
+        spans = _aggregate_tokens(
+            [
+                {"prefix": "B", "entity": "PERSON", "start": 0, "end": 5, "score": 0.9},
+                {"prefix": "B", "entity": "LOCATION", "start": 9, "end": 14, "score": 0.8},
+            ],
+            text,
+        )
+
+        assert [(s["entity_group"], s["word"]) for s in spans] == [
+            ("PERSON", "Alice"),
+            ("LOCATION", "Paris"),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -257,13 +303,31 @@ class TestDetectChunking:
             (12, 15, "foo"),
         ]
 
-    def test_pipeline_called_once_per_chunk(self, make_filter, fake_pipeline):
+    def test_multichunk_text_is_one_batched_pipeline_call(
+        self, make_filter, fake_pipeline
+    ):
         text = "hello world foo"
         f = make_filter(chunk_size=10)
         f.detect(text)
-        # Two chunks → two pipeline calls (each with a str arg).
-        assert len(fake_pipeline.calls) == 2
-        assert all(isinstance(c, str) for c in fake_pipeline.calls)
+        assert len(fake_pipeline.calls) == 1
+        assert isinstance(fake_pipeline.calls[0], list)
+        assert "".join(fake_pipeline.calls[0]) == text
+
+    def test_batched_multichunk_offsets_shift_by_chunk_start(
+        self, make_filter, fake_pipeline
+    ):
+        text = "aaaa bbbb cccc dddd"
+        f = make_filter(chunk_size=10)
+        chunks = _split_chunks(text, 10)
+        assert len(chunks) > 1
+        second_offset, second_chunk = chunks[1]
+        fake_pipeline.set(second_chunk, [span("PERSON", 0, 4, score=0.9)])
+
+        [entity] = f.detect(text)
+
+        assert entity.text == second_chunk[:4]
+        assert entity.start == second_offset
+        assert entity.end == second_offset + 4
 
     def test_cross_chunk_adjacency_merge(self, make_filter, fake_pipeline):
         # chunk_size=7, text="Alice Smith":
@@ -419,6 +483,59 @@ class TestConstructor:
         monkeypatch.setattr(privacy_filter, "pipeline", _stub)
         PrivacyFilter(device="cuda:0")
         assert captured["device"] == "cuda:0"
+
+    def test_torch_backend_builds_transformers_pipeline(
+        self, monkeypatch, fake_pipeline
+    ):
+        captured: dict = {}
+
+        def _stub(**kwargs):
+            captured.update(kwargs)
+            return fake_pipeline
+
+        monkeypatch.setattr(privacy_filter, "pipeline", _stub)
+        PrivacyFilter(backend="torch", device="mps")
+        assert captured["model"] == PrivacyFilter.MODEL_ID
+        assert captured["device"] == "mps"
+
+    def test_onnx_backend_uses_upstream_quantized_graph(
+        self, monkeypatch, fake_pipeline
+    ):
+        captured: dict = {}
+
+        def _load_onnx_model(*, provider):
+            captured["provider"] = provider
+            return fake_pipeline
+
+        def _stub(**kwargs):
+            raise AssertionError("ONNX backend must not use transformers.pipeline")
+
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model", _load_onnx_model)
+        monkeypatch.setattr(privacy_filter, "pipeline", _stub)
+
+        f = PrivacyFilter(backend="onnx")
+
+        assert captured["provider"] == "CPUExecutionProvider"
+        assert f._pipe is fake_pipeline
+
+    def test_onnx_backend_accepts_provider_override(self, monkeypatch, fake_pipeline):
+        captured: dict = {}
+
+        def _load_onnx_model(*, provider):
+            captured["provider"] = provider
+            return fake_pipeline
+
+        monkeypatch.setattr(privacy_filter, "_load_onnx_model", _load_onnx_model)
+
+        PrivacyFilter(backend="onnx", onnx_provider="CoreMLExecutionProvider")
+
+        assert captured["provider"] == "CoreMLExecutionProvider"
+
+    def test_invalid_backend_fails_fast(self, monkeypatch, fake_pipeline):
+        monkeypatch.setattr(privacy_filter, "pipeline", lambda **_kw: fake_pipeline)
+
+        with pytest.raises(ValueError, match="backend"):
+            PrivacyFilter(backend="mlx")
 
 
 # ---------------------------------------------------------------------------
