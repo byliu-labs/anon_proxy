@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import re
 
-from anon_proxy.masker import _drop_placeholder_overlaps, _resolve_overlaps
+from anon_proxy.masker import (
+    _drop_placeholder_overlaps,
+    _resolve_overlaps,
+    telemetry_scope,
+)
 from anon_proxy.privacy_filter import PIIEntity
 from anon_proxy.regex_detector import RegexDetector
 
@@ -251,6 +255,42 @@ class TestRegexAndMlCombined:
         # Only one entry in the store; first-seen original ("Alice") preserved.
         assert len(store) == 1
         assert store.original("<PERSON_1>") == "Alice"
+
+    def test_mask_telemetry_records_safe_entity_metadata(
+        self, make_masker, fake_pipeline
+    ):
+        detector = RegexDetector({"PHONE": r"\d{3}-\d{4}"})
+        m = make_masker(extra_detectors=[detector])
+        text = "Call 555-1212 about Bob"
+        intermediate = "Call <PHONE_1> about Bob"
+        fake_pipeline.set(intermediate, [span("PERSON", 21, 24, score=0.72)])
+
+        with telemetry_scope() as calls:
+            assert m.mask(text) == "Call <PHONE_1> about <PERSON_1>"
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["entities"] == [
+            {"label": "PHONE", "score": 1.0, "len": 8, "source": "regex"},
+            {"label": "PERSON", "score": 0.72, "len": 3, "source": "ml"},
+        ]
+        assert "555-1212" not in repr(mask_call)
+        assert "Bob" not in repr(mask_call)
+
+    def test_cache_hit_replays_safe_entity_metadata(self, make_masker, fake_pipeline):
+        m = make_masker()
+        fake_pipeline.set("Hello Bob", [span("PERSON", 6, 9, score=0.9)])
+
+        with telemetry_scope():
+            assert m.mask("Hello Bob") == "Hello <PERSON_1>"
+        with telemetry_scope() as calls:
+            assert m.mask("Hello Bob") == "Hello <PERSON_1>"
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["cache_hit"] is True
+        assert mask_call["entities"] == [
+            {"label": "PERSON", "score": 0.9, "len": 3, "source": "ml"}
+        ]
+        assert "Bob" not in repr(mask_call)
 
 
 class TestEmptyExtraDetectorsIsTransparent:

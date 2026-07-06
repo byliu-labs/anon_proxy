@@ -54,6 +54,7 @@ Issues = "https://github.com/KevinXuxuxu/anon_proxy/issues"
 
 [project.scripts]
 anon-proxy = "anon_proxy.server:main"
+anon-proxy-capture-report = "anon_proxy.capture_report:main"
 
 [build-system]
 requires = ["hatchling"]

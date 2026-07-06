@@ -114,6 +114,8 @@ uv run python -m anon_proxy.server [options]
 | `--extra-upstream` | — | Add custom provider: `name=url[;adapter=anthropic\|openai][;path_prefix=/path]` |
 | `--store <file>` | — | Path to persistent PII mapping store. Loaded at startup; saved after each request with new entries. Enables cross-restart placeholder consistency — see [Persistent store](#persistent-store) below. |
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
+| `--metrics` | off | Log per-turn latency metrics to stderr |
+| `--capture <file>` | — | Append sensitive local JSONL captures for offline analysis. Capture files contain raw PII; keep them local. |
 | `--config <file>` | — | Unified `config.json` (extra regex patterns, per-label merge-gap overrides, ML labels to skip masking on). See [Config file](#config-file) below. |
 | `--chunk-size <N>` | `1500` | Max chars per model inference pass — lower values reduce peak VRAM |
 | `--no-system-inject` | off | Disable the placeholder-explainer system prompt that the proxy prepends to outbound requests. Also settable via `system_inject: false` in `config.json`. |
@@ -290,6 +292,20 @@ With `--debug`, each request prints a compact diff to stderr:
 **What is NOT masked:** the system prompt (tool schemas and static instructions), tool definitions, and extended-thinking blocks (signatures would break). See [`SECURITY.md`](SECURITY.md) for the full threat model and known limitations.
 
 **How it works:** PII spans get stable placeholder tokens (`<PERSON_1>`, `<EMAIL_1>`, `<ADDRESS_1>`, …) stored in an in-memory mapping. The same value always maps to the same token across turns so the model stays coherent. Optionally persist this mapping to disk with `--store` (see [Persistent store](#persistent-store)). Responses are unmasked before reaching your client.
+
+### Capture reports
+
+When `--capture` is enabled, mask telemetry records safe per-entity detector metadata:
+`label`, `score`, `len`, and `source`. It deliberately does not record the matched
+text in detector telemetry. Summarize capture files with:
+
+```bash
+uv run anon-proxy-capture-report /data/capture.jsonl
+uv run anon-proxy-capture-report --json /data/capture.jsonl
+```
+
+The report prints per-label score histograms and source counts without emitting
+request or response text from the capture file.
 
 ---
 

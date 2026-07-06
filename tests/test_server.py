@@ -8,6 +8,7 @@ Covered:
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,13 +16,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from anon_proxy.capture import Capturer
 from anon_proxy.mapping import PIIStore
+from anon_proxy.masker import Masker
+from anon_proxy.regex_detector import RegexDetector
 from anon_proxy.server import (
     _extract_usage,
     _maybe_save_store,
     _should_mask_request,
     _upstream_request,
     _write_store_json,
+    build_app,
 )
 
 
@@ -265,6 +270,59 @@ class TestUpstreamRequest:
             headers={"Authorization": "Bearer xyz"},
             params={"page": "1"},
         )
+
+
+class TestCaptureDetectorTelemetry:
+    @pytest.mark.anyio
+    async def test_capture_file_contains_safe_per_entity_detector_metadata(
+        self, monkeypatch, tmp_path, make_filter
+    ):
+        async def fake_upstream_request(*_args, **_kwargs):
+            return httpx.Response(
+                200,
+                json={"content": [{"type": "text", "text": "ok"}]},
+                headers={"content-type": "application/json"},
+            )
+
+        monkeypatch.setattr(
+            "anon_proxy.server._upstream_request", fake_upstream_request
+        )
+        capture_path = tmp_path / "capture.jsonl"
+        capturer = Capturer(str(capture_path))
+        masker = Masker(
+            filter=make_filter(),
+            store=PIIStore(),
+            extra_detectors=[RegexDetector({"PHONE": r"\d{3}-\d{4}"})],
+            skip_patterns=[],
+        )
+        app = build_app(masker=masker, capture=capturer, system_inject=False)
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                response = await client.post(
+                    "/anthropic/v1/messages",
+                    json={
+                        "model": "claude-test",
+                        "messages": [
+                            {"role": "user", "content": "Call 555-1212 today"}
+                        ],
+                    },
+                )
+
+        assert response.status_code == 200
+        record = json.loads(capture_path.read_text().splitlines()[0])
+        mask_call = next(
+            call
+            for call in record["timing_ms"]["detector_calls"]
+            if call["op"] == "mask"
+        )
+        assert mask_call["entities"] == [
+            {"label": "PHONE", "score": 1.0, "len": 8, "source": "regex"}
+        ]
+        assert "555-1212" not in json.dumps(mask_call)
 
 
 class TestExtractUsage:

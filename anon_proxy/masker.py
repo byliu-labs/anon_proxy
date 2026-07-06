@@ -22,7 +22,9 @@ def telemetry_scope():
     """Collect per-call masker telemetry into a fresh list for the current task.
 
     Each entry: {"op": "mask"|"unmask"|"unmask_json", "chars": int, "ms": float,
-    "cache_hit": bool (mask only), "skipped": bool (mask, optional)}.
+    "cache_hit": bool (mask only), "skipped": bool (mask, optional),
+    "entities": [{"label": str, "score": float, "len": int, "source": str}, ...]
+    (mask only)}. Entity telemetry deliberately excludes matched text.
     Safe under concurrent asyncio tasks — each task gets its own list via contextvars.
     """
     record: list = []
@@ -88,8 +90,10 @@ class Masker:
             normalize_label(s) for s in (ignore_labels or ())
         )
         self._cache_size = cache_size
-        # LRU cache: content_hash -> (entities, masked_text)
-        self._cache: OrderedDict[str, tuple[list[PIIEntity], str]] = OrderedDict()
+        # LRU cache: content_hash -> (safe entity telemetry, masked_text)
+        self._cache: OrderedDict[str, tuple[list[dict[str, Any]], str]] = (
+            OrderedDict()
+        )
         # LRU cache: block_hash -> already-masked block-shaped object
         self._block_cache: OrderedDict[str, Any] = OrderedDict()
 
@@ -132,6 +136,7 @@ class Masker:
                         "chars": len(text),
                         "ms": (time.perf_counter() - t0) * 1000,
                         "cache_hit": True,
+                        "entities": list(cached[0]),
                     }
                 )
             return cached[1]
@@ -144,6 +149,7 @@ class Masker:
         for detector in self._extra:
             regex_entities.extend(detector.detect(text))
         regex_entities = _resolve_overlaps(regex_entities)
+        regex_telemetry = _entity_telemetry(regex_entities, source="regex")
         intermediate = self._substitute(text, regex_entities)
 
         # Pass 2: ML model on the regex-masked text. Defensively drop any span
@@ -160,9 +166,11 @@ class Masker:
                 if normalize_label(e.label) not in self._ignore_labels
             ]
         ml_entities = _resolve_overlaps(ml_entities)
+        ml_telemetry = _entity_telemetry(ml_entities, source="ml")
         masked = self._substitute(intermediate, ml_entities)
 
-        self._cache_result(content_hash, regex_entities + ml_entities, masked)
+        entities = regex_telemetry + ml_telemetry
+        self._cache_result(content_hash, entities, masked)
         if record is not None:
             record.append(
                 {
@@ -170,15 +178,16 @@ class Masker:
                     "chars": len(text),
                     "ms": (time.perf_counter() - t0) * 1000,
                     "cache_hit": False,
+                    "entities": entities,
                 }
             )
         return masked
 
     def _cache_result(
-        self, content_hash: str, entities: list[PIIEntity], masked: str
+        self, content_hash: str, entities: list[dict[str, Any]], masked: str
     ) -> None:
         """Cache a detection result with LRU eviction."""
-        self._cache[content_hash] = (entities, masked)
+        self._cache[content_hash] = (list(entities), masked)
         self._cache.move_to_end(content_hash)
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
@@ -309,6 +318,19 @@ def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PII
         e
         for e in entities
         if not any(e.start < pe and e.end > ps for ps, pe in placeholders)
+    ]
+
+
+def _entity_telemetry(entities: list[PIIEntity], *, source: str) -> list[dict[str, Any]]:
+    """Return safe per-entity telemetry without matched text."""
+    return [
+        {
+            "label": normalize_label(e.label),
+            "score": float(e.score),
+            "len": e.end - e.start,
+            "source": source,
+        }
+        for e in entities
     ]
 
 
