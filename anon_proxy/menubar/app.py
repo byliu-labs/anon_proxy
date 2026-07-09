@@ -7,6 +7,7 @@ import datetime as dt
 import sys
 import time
 
+from anon_proxy import client_config
 from anon_proxy.menubar import config as cfg
 from anon_proxy.menubar import themes
 from anon_proxy.menubar.render import format_watch_line, render
@@ -58,6 +59,16 @@ def watch_loop(url: str, *, interval: float = 2.0) -> None:
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nstopped.")
+
+
+def menu_config_lines(host: str = "127.0.0.1", port: int = 8080) -> list[str]:
+    """Return one client export line per menu-visible provider."""
+    return [
+        client_config.env_snippet(
+            provider, client_config.base_url_for(provider, host=host, port=port)
+        )
+        for provider in ("claude", "openai")
+    ]
 
 
 def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
@@ -112,6 +123,15 @@ def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
             self.menu.add(rumps.MenuItem("Stop proxy", callback=self._stop_proxy))
             self.menu.add(rumps.MenuItem("Restart proxy", callback=self._restart_proxy))
             self.menu.add(None)
+            self.menu.add(
+                rumps.MenuItem(
+                    "Copy Claude Code base URL", callback=self._copy_claude_url
+                )
+            )
+            self.menu.add(
+                rumps.MenuItem("Copy OpenAI base URL", callback=self._copy_openai_url)
+            )
+            self.menu.add(None)
             item = rumps.MenuItem(
                 "Start at login", callback=self._toggle_start_at_login
             )
@@ -151,6 +171,24 @@ def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
 
         def _restart_proxy(self, _sender) -> None:
             self._supervisor.restart()
+
+        def _copy_url(self, provider: str) -> None:
+            url = client_config.base_url_for(provider)
+            try:
+                from AppKit import NSPasteboard, NSStringPboardType
+
+                pb = NSPasteboard.generalPasteboard()
+                pb.declareTypes_owner_([NSStringPboardType], None)
+                pb.setString_forType_(url, NSStringPboardType)
+                rumps.notification("anon-proxy", "Copied", url)
+            except Exception:
+                print(url)
+
+        def _copy_claude_url(self, _sender) -> None:
+            self._copy_url("claude")
+
+        def _copy_openai_url(self, _sender) -> None:
+            self._copy_url("openai")
 
         def _tick(self, _timer) -> None:
             now = time.time()
