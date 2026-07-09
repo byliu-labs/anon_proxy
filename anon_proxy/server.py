@@ -359,7 +359,7 @@ def build_app(
             app.state.upstreams = all_upstreams
             app.state.system_inject = system_inject
             app.state.store_path = store_path
-            app.state.backend = backend
+            app.state.backend = masker.backend if masker is not None else backend
             app.state.listen_addr = listen_addr
             app.state.event_sink = event_sink
             yield
