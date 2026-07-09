@@ -40,9 +40,7 @@ def test_status_reports_metrics_and_static_facts():
 
 
 def test_status_route_not_treated_as_provider():
-    app = build_app(
-        masker=_status_masker(), metrics=ProxyMetrics(started_at=0.0)
-    )
+    app = build_app(masker=_status_masker(), metrics=ProxyMetrics(started_at=0.0))
 
     with TestClient(app) as client:
         resp = client.get("/_status")
@@ -59,7 +57,7 @@ def test_status_reports_resolved_backend_not_auto(monkeypatch):
         privacy_filter, "_module_available", lambda name: name == "onnxruntime"
     )
     monkeypatch.setattr(
-        privacy_filter, "_load_onnx_classifier", lambda **_kw: (lambda *_a, **_k: [])
+        privacy_filter, "_load_onnx_classifier", lambda **_kw: lambda *_a, **_k: []
     )
     pf = privacy_filter.PrivacyFilter(backend="auto")
 

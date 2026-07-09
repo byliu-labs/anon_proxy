@@ -37,7 +37,9 @@ def _install_fake_torch(monkeypatch, *, cuda_available: bool = False) -> None:
         cuda=types.SimpleNamespace(is_available=lambda: cuda_available)
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setattr(privacy_filter, "_module_available", lambda name: name == "torch")
+    monkeypatch.setattr(
+        privacy_filter, "_module_available", lambda name: name == "torch"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +155,7 @@ class TestBackendResolution:
         assert privacy_filter._resolve_backend("onnx") == "onnx"
         assert privacy_filter._resolve_backend("cpu") == "cpu"
 
-    def test_explicit_torch_without_torch_installed_errors_at_build(
-        self, monkeypatch
-    ):
+    def test_explicit_torch_without_torch_installed_errors_at_build(self, monkeypatch):
         monkeypatch.setattr(
             privacy_filter, "_module_available", lambda name: name != "torch"
         )
