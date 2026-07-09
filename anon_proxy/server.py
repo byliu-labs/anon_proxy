@@ -342,6 +342,14 @@ def build_app(
     proxy_metrics = proxy_metrics or ProxyMetrics()
     all_upstreams = {**BUILT_IN_UPSTREAMS, **(extra_upstreams or {})}
 
+    def backend_for_status() -> str:
+        if masker is None:
+            return backend
+        try:
+            return masker.backend
+        except AttributeError:
+            return backend
+
     @asynccontextmanager
     async def lifespan(app: Starlette):
         owns_client = http_client is None
@@ -359,7 +367,7 @@ def build_app(
             app.state.upstreams = all_upstreams
             app.state.system_inject = system_inject
             app.state.store_path = store_path
-            app.state.backend = masker.backend if masker is not None else backend
+            app.state.backend = backend_for_status()
             app.state.listen_addr = listen_addr
             app.state.event_sink = event_sink
             yield
