@@ -1,15 +1,20 @@
-"""Package metadata and console-script contract."""
+"""Package metadata, console-script contract, and torch-free bundle layout."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
+
+PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
 def _pyproject() -> dict:
-    return tomllib.loads(Path("pyproject.toml").read_text())
+    with open(PYPROJECT, "rb") as f:
+        return tomllib.load(f)
 
 
 def test_repo_urls_point_at_byliu_labs():
@@ -27,3 +32,29 @@ def test_console_scripts_present():
         "anon-proxy-store",
     }
     assert scripts["anon-proxy"] == "anon_proxy.cli:main"
+
+
+def test_torch_is_not_a_base_dependency():
+    deps = _pyproject()["project"]["dependencies"]
+    assert not any(d.split(">")[0].split("=")[0].strip() == "torch" for d in deps), (
+        "torch must be optional so the base install stays torch-free; found it in "
+        "[project.dependencies]"
+    )
+
+
+def test_torch_extra_exists_with_version_floor():
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "torch" in extras, "expected a 'torch' optional-dependencies extra"
+    assert any("torch>=2.11.0" in d for d in extras["torch"]), (
+        "torch extra must pin the >=2.11.0 floor"
+    )
+
+
+def test_transformers_stays_a_base_dependency():
+    deps = _pyproject()["project"]["dependencies"]
+    assert any(d.startswith("transformers") for d in deps)
+
+
+def test_onnx_extra_still_present():
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "onnx" in extras and any("onnxruntime" in d for d in extras["onnx"])
