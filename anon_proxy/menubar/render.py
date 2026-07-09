@@ -52,8 +52,18 @@ def _menu_lines(status: dict) -> list[str]:
     return lines
 
 
-def render(status: dict | None, *, alarm: bool, now: float) -> RenderState:
+def render(
+    status: dict | None, *, alarm: bool, now: float, child_running: bool = False
+) -> RenderState:
     if status is None:
+        if child_running:
+            return RenderState(
+                icon_state="loading",
+                fps=0.0,
+                title="",
+                tooltip="anon-proxy: starting (first run downloads the model)",
+                menu=["Starting proxy", "Downloading model on first run"],
+            )
         return RenderState(
             icon_state="down",
             fps=0.0,

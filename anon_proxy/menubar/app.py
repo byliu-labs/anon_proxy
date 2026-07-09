@@ -188,7 +188,12 @@ def _run_macos_app(
                 self._last_status = fetch_status(self._url)
                 self._last_poll_at = now
             alarm = self._latch.update(self._last_status)
-            state = render(self._last_status, alarm=alarm, now=now)
+            state = render(
+                self._last_status,
+                alarm=alarm,
+                now=now,
+                child_running=self._supervisor.is_running(),
+            )
             self._animate(state, now)
             self.title = f" {state.title}" if state.title else ""
             self.tooltip = state.tooltip

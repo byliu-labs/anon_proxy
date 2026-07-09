@@ -32,6 +32,13 @@ def test_down_when_status_none():
     assert "not running" in state.tooltip.lower()
 
 
+def test_loading_when_child_running_but_status_unreachable():
+    state = render(None, alarm=False, now=1.0, child_running=True)
+    assert state.icon_state == "loading"
+    assert "starting" in state.tooltip.lower() or "download" in state.tooltip.lower()
+    assert state.menu == ["Starting proxy", "Downloading model on first run"]
+
+
 def test_idle_when_no_throughput():
     state = render(_status(tokens_per_sec=0.0), alarm=False, now=1.0)
     assert state.icon_state == "idle"

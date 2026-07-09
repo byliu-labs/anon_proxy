@@ -10,6 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+PYINSTALLER_SPEC = Path(__file__).resolve().parent.parent / "packaging/anon-proxy.spec"
 
 
 def _pyproject() -> dict:
@@ -58,3 +59,15 @@ def test_transformers_stays_a_base_dependency():
 def test_onnx_extra_still_present():
     extras = _pyproject()["project"]["optional-dependencies"]
     assert "onnx" in extras and any("onnxruntime" in d for d in extras["onnx"])
+
+
+def test_bundle_extra_installs_pyinstaller():
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "bundle" in extras, "expected a 'bundle' extra for app packaging"
+    assert any(d.startswith("pyinstaller") for d in extras["bundle"])
+
+
+def test_pyinstaller_spec_excludes_torch():
+    spec = PYINSTALLER_SPEC.read_text()
+    assert "excludes=" in spec
+    assert '"torch"' in spec

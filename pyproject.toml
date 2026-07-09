@@ -50,6 +50,9 @@ dependencies = [
 gen = [
     "pillow>=10.0.0",
 ]
+bundle = [
+    "pyinstaller>=6.11.0",
+]
 menubar = [
     "rumps>=0.4.0; sys_platform == 'darwin'",
 ]
