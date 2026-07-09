@@ -78,6 +78,9 @@ def make_filter(monkeypatch, fake_pipeline):
         return fake_pipeline
 
     monkeypatch.setattr(privacy_filter, "pipeline", _stub_pipeline)
+    monkeypatch.setattr(
+        privacy_filter, "_module_available", lambda name: name == "torch"
+    )
 
     def _make(**kwargs) -> PrivacyFilter:
         return PrivacyFilter(**kwargs)

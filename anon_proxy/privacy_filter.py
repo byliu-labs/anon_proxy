@@ -86,10 +86,11 @@ class PrivacyFilter:
         backend: Backend = "auto",
         onnx_provider: str = DEFAULT_ONNX_PROVIDER,
     ) -> None:
+        self._backend = _resolve_backend(backend)
         self._pipe = _build_pipeline(
             model_id=self.MODEL_ID,
             aggregation_strategy=aggregation_strategy,
-            backend=backend,
+            backend=self._backend,
             device=device,
             onnx_provider=onnx_provider,
         )
@@ -101,6 +102,11 @@ class PrivacyFilter:
         self._chunk_size = chunk_size
         self._batch_size = batch_size
         self._infer_lock = threading.Lock()
+
+    @property
+    def backend(self) -> str:
+        """The concrete backend actually running (never 'auto')."""
+        return self._backend
 
     def detect(self, text: str) -> list[PIIEntity]:
         if not text.strip():
@@ -134,6 +140,28 @@ class PrivacyFilter:
             return list(self._pipe(text))
 
 
+def _module_available(name: str) -> bool:
+    """True iff `name` can be imported, without importing it."""
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def _resolve_backend(backend: Backend) -> str:
+    """Resolve 'auto' to a concrete backend from what's installed."""
+    if backend != "auto":
+        return backend
+    if _module_available("torch"):
+        return "torch"
+    if _module_available("onnxruntime"):
+        return "onnx"
+    raise RuntimeError(
+        "no PII inference backend is installed; install one with "
+        "`uv sync --extra torch` (GPU-capable, ~2 GB) or `uv sync --extra onnx` "
+        "(smaller, fast CPU-only)"
+    )
+
+
 def _build_pipeline(
     *,
     model_id: str,
@@ -144,22 +172,29 @@ def _build_pipeline(
 ):
     """Construct the callable that `detect()` invokes once per chunk.
 
-    torch/auto/cpu/mps/cuda → the HF token-classification pipeline.
-    onnx → the ONNX Runtime classifier, exposing the same call surface.
+    torch/auto→torch/cpu/mps/cuda → the HF token-classification pipeline.
+    onnx / auto→onnx → the ONNX Runtime classifier, same call surface.
     """
-    if backend in ("auto", "torch", "cpu", "mps", "cuda"):
+    resolved = _resolve_backend(backend)
+    if resolved in ("torch", "cpu", "mps", "cuda"):
+        if not _module_available("torch"):
+            raise RuntimeError(
+                f"the {resolved!r} backend requires torch; install it with "
+                "`uv sync --extra torch`, or use `--backend onnx` "
+                "(`uv sync --extra onnx`) for the smaller CPU runtime"
+            )
         return pipeline(
             task="token-classification",
             model=model_id,
             aggregation_strategy=aggregation_strategy,
-            device=_resolve_torch_device(backend, device),
+            device=_resolve_torch_device(resolved, device),
         )
-    if backend == "onnx":
+    if resolved == "onnx":
         if device is not None:
             raise ValueError("device is only valid with a torch backend")
         return _load_onnx_classifier(model_id=model_id, provider=onnx_provider)
     raise ValueError(
-        f"unsupported backend {backend!r}; expected one of "
+        f"unsupported backend {resolved!r}; expected one of "
         "'auto', 'torch', 'cpu', 'mps', 'cuda', 'onnx'"
     )
 
