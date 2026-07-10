@@ -129,7 +129,9 @@ def _cmd_up(args: list[str]) -> int:
 
     from anon_proxy.menubar import app as menubar_app
 
-    menubar_app.main(["--start-proxy"])
+    menubar_app.main(
+        ["--start-proxy", "--backend", model_cache.normalize_backend(ns.backend)]
+    )
     return 0
 
 

@@ -47,7 +47,13 @@ def test_up_prefetches_when_uncached(monkeypatch):
     assert cli.main(["up", "--backend", "onnx-q4f16"]) == 0
 
     assert ("download", "onnx-q4f16") in events
-    assert ("gui", ["--start-proxy"]) in events
+    gui_calls = [argv for tag, argv in events if tag == "gui"]
+    assert gui_calls, "GUI path was not launched"
+    gui_argv = gui_calls[0]
+    assert "--start-proxy" in gui_argv
+    # The backend the user requested must reach the supervised proxy, not just
+    # the download step — the normalized runtime name (onnx-q4f16 -> onnx).
+    assert gui_argv[gui_argv.index("--backend") + 1] == "onnx"
 
 
 def test_up_skips_download_when_cached(monkeypatch):

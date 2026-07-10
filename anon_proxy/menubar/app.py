@@ -61,17 +61,9 @@ def watch_loop(url: str, *, interval: float = 2.0) -> None:
         print("\nstopped.")
 
 
-def menu_config_lines(host: str = "127.0.0.1", port: int = 8080) -> list[str]:
-    """Return one client export line per menu-visible provider."""
-    return [
-        client_config.env_snippet(
-            provider, client_config.base_url_for(provider, host=host, port=port)
-        )
-        for provider in ("claude", "openai")
-    ]
-
-
-def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
+def _run_macos_app(
+    url: str, *, start_proxy: bool = False, backend: str | None = None
+) -> None:
     import rumps
 
     class DinoApp(rumps.App):
@@ -80,7 +72,7 @@ def _run_macos_app(url: str, *, start_proxy: bool = False) -> None:
             self._cfg = cfg.load_config()
             self._url = url or self._cfg["url"]
             self._latch = AlarmLatch()
-            self._supervisor = ProxySupervisor()
+            self._supervisor = ProxySupervisor(backend=backend)
             self._last_status: dict | None = None
             self._frame_idx = 0
             self._last_frame_at = 0.0
@@ -235,6 +227,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--start-proxy", action="store_true", help="launch a supervised proxy on start"
     )
+    parser.add_argument(
+        "--backend",
+        default=None,
+        help="inference backend for the supervised proxy (torch, onnx, auto)",
+    )
     args = parser.parse_args(argv)
 
     url = args.url or cfg.load_config()["url"]
@@ -243,7 +240,7 @@ def main(argv: list[str] | None = None) -> None:
             print("menu bar is macOS-only; showing --watch terminal view instead.")
         watch_loop(url)
         return
-    _run_macos_app(url, start_proxy=args.start_proxy)
+    _run_macos_app(url, start_proxy=args.start_proxy, backend=args.backend)
 
 
 if __name__ == "__main__":
