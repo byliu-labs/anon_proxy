@@ -42,7 +42,6 @@ dependencies = [
     "openai>=2.35.1",
     "prompt-toolkit>=3.0.52",
     "starlette>=1.0.0",
-    "torch>=2.11.0",
     "transformers>=5.6.0",
     "uvicorn[standard]>=0.45.0",
 ]
@@ -51,8 +50,17 @@ dependencies = [
 gen = [
     "pillow>=10.0.0",
 ]
+bundle = [
+    "pyinstaller>=6.11.0",
+]
 menubar = [
     "rumps>=0.4.0; sys_platform == 'darwin'",
+]
+# GPU-capable inference backend: the full torch HF pipeline. Heavier install
+# (~2 GB) — opt in when you have a CUDA/MPS GPU or want the torch reference.
+# Without it, the proxy runs on the onnx extra (or errors with an install hint).
+torch = [
+    "torch>=2.11.0",
 ]
 # Fast CPU inference backend: loads the pre-quantized ONNX export the
 # openai/privacy-filter repo already ships and runs it through ONNX Runtime.
@@ -87,7 +95,7 @@ artifacts = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
-    "ruff>=0.15.20",
+    "ruff==0.15.20",
 ]
 
 [tool.pytest.ini_options]

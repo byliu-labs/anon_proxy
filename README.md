@@ -121,16 +121,16 @@ anon-proxy-menubar
 ## Prerequisites
 
 - Python ≥ 3.10 (use [uv](https://docs.astral.sh/uv/))
-- CUDA GPU recommended (≥4 GB VRAM); CPU works but is slower
+- ONNX Runtime recommended for CPU-only machines; torch is optional for GPU-capable inference
 - Apple Silicon (M1/M2/M3/M4) supported via the MPS backend
 - `ANTHROPIC_API_KEY` for `test_mask.py`; the proxy itself forwards client auth — no key needed on the server
 
 ```bash
-uv sync         # install dependencies
-uv sync --extra onnx  # optional: fast ONNX Runtime backend (see --backend onnx)
+uv sync --extra onnx    # recommended: fast, CPU-only ONNX Runtime backend (~300-500 MB)
+uv sync --extra torch   # heavier (~2 GB): GPU-capable torch backend (CUDA/MPS)
 ```
 
-**Dependencies:** `torch`, `transformers` (local PII model), `starlette` + `uvicorn` (proxy server), `httpx` (upstream client), `anthropic` + `prompt-toolkit` (demo scripts).
+**Dependencies:** `transformers` + `tokenizers` (local PII model + tokenizer), `starlette` + `uvicorn` (proxy server), `httpx` (upstream client), `anthropic` + `prompt-toolkit` (demo scripts). The inference backend is a choice: `onnxruntime` (`--extra onnx`, default when torch is absent) or `torch` (`--extra torch`, GPU-capable). Installing neither makes the proxy exit at startup with an install hint.
 
 ---
 
@@ -144,7 +144,7 @@ uv run python -m anon_proxy.server [options]
 |---|---|---|
 | `--host` | `127.0.0.1` | Bind address (`0.0.0.0` to expose on LAN) |
 | `--port` | `8080` | Listen port |
-| `--backend` | `auto` | PII detection backend. `auto` uses a CUDA GPU if present, else CPU. `cuda`/`cpu`/`mps` pin the torch device (`mps` is not auto-picked — it is slower than CPU for this model). `onnx` runs the pre-quantized q4f16 export via ONNX Runtime — much faster on CPU; needs `uv sync --extra onnx`. See [Fast ONNX backend](#fast-onnx-backend). |
+| `--backend` | `auto` | PII detection backend. `auto` uses torch if installed (a CUDA GPU if present, else CPU), otherwise falls back to the `onnx` runtime, otherwise exits with an install hint. `cuda`/`cpu`/`mps` pin the torch device (needs `--extra torch`; `mps` is not auto-picked — slower than CPU for this model). `onnx` runs the pre-quantized q4f16 export via ONNX Runtime — much faster on CPU; needs `--extra onnx`. See [Fast ONNX backend](#fast-onnx-backend). |
 | `--extra-upstream` | — | Add custom provider: `name=url[;adapter=anthropic\|openai][;path_prefix=/path]` |
 | `--store <file>` | — | Path to persistent PII mapping store. Loaded at startup; saved after each request with new entries. Enables cross-restart placeholder consistency — see [Persistent store](#persistent-store) below. |
 | `--multi-user` | off | Namespace PII stores by client credential. Requires each masking request to include `x-api-key` or `authorization`; with `--store`, the path is treated as a directory. |
@@ -212,6 +212,9 @@ uv run python -m anon_proxy.server --backend onnx
 
 - **Opt-in:** the onnx extra (`onnxruntime`) is not part of the base
   install. Without it, `--backend onnx` fails with a clear install hint.
+- **Default when torch is absent:** on a torch-free install (`uv sync --extra
+  onnx`), `--backend auto` resolves to `onnx` automatically — no flag needed.
+  This is the path the bundled macOS app ships.
 - **Same detections:** a golden parity gate
   (`tests/test_backend_parity.py`) asserts the onnx backend masks every
   character the torch backend masks across names, emails, phones, addresses,

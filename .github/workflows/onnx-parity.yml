@@ -38,9 +38,9 @@ jobs:
             hf-privacy-filter-onnx-
 
       - name: Install dependencies (onnx extra + torch reference)
-        run: uv sync --extra onnx --dev
+        run: uv sync --extra onnx --extra torch --dev
 
       - name: Run ONNX detection-parity gate
         env:
           ANON_PROXY_LIVE_TESTS: "1"
-        run: uv run --extra onnx pytest tests/test_backend_parity.py -v
+        run: uv run --extra onnx --extra torch pytest tests/test_backend_parity.py -v

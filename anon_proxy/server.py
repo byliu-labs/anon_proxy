@@ -342,6 +342,14 @@ def build_app(
     proxy_metrics = proxy_metrics or ProxyMetrics()
     all_upstreams = {**BUILT_IN_UPSTREAMS, **(extra_upstreams or {})}
 
+    def backend_for_status() -> str:
+        if masker is None:
+            return backend
+        try:
+            return masker.backend
+        except AttributeError:
+            return backend
+
     @asynccontextmanager
     async def lifespan(app: Starlette):
         owns_client = http_client is None
@@ -359,7 +367,7 @@ def build_app(
             app.state.upstreams = all_upstreams
             app.state.system_inject = system_inject
             app.state.store_path = store_path
-            app.state.backend = backend
+            app.state.backend = backend_for_status()
             app.state.listen_addr = listen_addr
             app.state.event_sink = event_sink
             yield
@@ -1026,11 +1034,12 @@ def _build_parser():
         "--backend",
         default=os.environ.get("ANON_PROXY_BACKEND", "auto"),
         choices=["auto", "torch", "cpu", "mps", "cuda", "onnx"],
-        help="PII detection backend. 'auto' uses a CUDA GPU if present, else "
-        "CPU. 'torch' is the torch pipeline with auto device selection. "
-        "'cuda'/'cpu'/'mps' pin the torch device (mps is not auto-picked — it "
-        "is slower than CPU for this model). 'onnx' runs the pre-quantized q4f16 "
-        "export via ONNX Runtime (much faster on CPU; needs `uv sync --extra onnx`).",
+        help="PII detection backend. 'auto' uses torch if installed (CUDA if "
+        "present, else CPU), otherwise ONNX Runtime if installed, otherwise "
+        "exits with an install hint. 'cuda'/'cpu'/'mps' pin the torch device "
+        "(needs `uv sync --extra torch`; mps is not auto-picked). 'onnx' runs "
+        "the pre-quantized q4f16 export via ONNX Runtime (much faster on CPU; "
+        "needs `uv sync --extra onnx`).",
     )
     parser.add_argument(
         "--onnx-provider",
@@ -1058,10 +1067,10 @@ def _build_parser():
     return parser
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
-    args = _build_parser().parse_args()
+    args = _build_parser().parse_args(argv)
 
     if args.config:
         try:

@@ -118,6 +118,11 @@ class Masker:
         self._block_cache: OrderedDict[str, Any] = OrderedDict()
 
     @property
+    def backend(self) -> str:
+        """The concrete PII detector backend used by this masker."""
+        return self._filter.backend
+
+    @property
     def store(self) -> PIIStore:
         return self._store
 

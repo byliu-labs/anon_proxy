@@ -15,6 +15,9 @@ Specs covered (agreed in Phase 1a):
 
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 from anon_proxy import privacy_filter
@@ -27,6 +30,16 @@ from anon_proxy.privacy_filter import (
 )
 
 from .conftest import span
+
+
+def _install_fake_torch(monkeypatch, *, cuda_available: bool = False) -> None:
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: cuda_available)
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        privacy_filter, "_module_available", lambda name: name == "torch"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +126,52 @@ class TestGapMergeable:
         assert _gap_mergeable("LABEL", "-", allowed) is True
         assert _gap_mergeable("LABEL", " - ", allowed) is True
         assert _gap_mergeable("LABEL", " x ", allowed) is False  # 'x' not allowed
+
+
+class TestBackendResolution:
+    def test_auto_resolves_to_torch_when_torch_available(self, monkeypatch):
+        monkeypatch.setattr(
+            privacy_filter, "_module_available", lambda name: name == "torch"
+        )
+        assert privacy_filter._resolve_backend("auto") == "torch"
+
+    def test_auto_resolves_to_onnx_when_only_onnxruntime_available(self, monkeypatch):
+        monkeypatch.setattr(
+            privacy_filter, "_module_available", lambda name: name == "onnxruntime"
+        )
+        assert privacy_filter._resolve_backend("auto") == "onnx"
+
+    def test_auto_prefers_torch_over_onnx_when_both_available(self, monkeypatch):
+        monkeypatch.setattr(privacy_filter, "_module_available", lambda name: True)
+        assert privacy_filter._resolve_backend("auto") == "torch"
+
+    def test_auto_raises_when_no_backend_installed(self, monkeypatch):
+        monkeypatch.setattr(privacy_filter, "_module_available", lambda name: False)
+        with pytest.raises(RuntimeError, match="no PII inference backend"):
+            privacy_filter._resolve_backend("auto")
+
+    def test_explicit_backend_passes_through_unchanged(self, monkeypatch):
+        monkeypatch.setattr(privacy_filter, "_module_available", lambda name: False)
+        assert privacy_filter._resolve_backend("onnx") == "onnx"
+        assert privacy_filter._resolve_backend("cpu") == "cpu"
+
+    def test_explicit_torch_without_torch_installed_errors_at_build(self, monkeypatch):
+        monkeypatch.setattr(
+            privacy_filter, "_module_available", lambda name: name != "torch"
+        )
+        with pytest.raises(RuntimeError, match="uv sync --extra torch"):
+            privacy_filter._build_pipeline(
+                model_id="x",
+                aggregation_strategy="simple",
+                backend="torch",
+                device=None,
+                onnx_provider=privacy_filter.DEFAULT_ONNX_PROVIDER,
+            )
+
+    def test_filter_exposes_resolved_backend(self, make_filter, monkeypatch):
+        monkeypatch.setattr(privacy_filter, "_module_available", lambda name: True)
+        f = make_filter()
+        assert f.backend == "torch"
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +476,7 @@ class TestDetectAdjacencyMerging:
 
 class TestConstructor:
     def test_aggregation_strategy_passed_to_pipeline(self, monkeypatch, fake_pipeline):
+        _install_fake_torch(monkeypatch)
         captured: dict = {}
 
         def _stub(**kwargs):
@@ -428,6 +488,7 @@ class TestConstructor:
         assert captured["aggregation_strategy"] == "max"
 
     def test_device_passed_to_pipeline(self, monkeypatch, fake_pipeline):
+        _install_fake_torch(monkeypatch)
         captured: dict = {}
 
         def _stub(**kwargs):
@@ -439,6 +500,7 @@ class TestConstructor:
         assert captured["device"] == "cuda:0"
 
     def test_onnx_backend_is_lazy_and_selectable(self, monkeypatch):
+        _install_fake_torch(monkeypatch)
         called = {"onnx": False}
 
         def _fake_load_onnx(*_args, **_kwargs):
@@ -492,6 +554,7 @@ class TestBackendDispatch:
             self._build(backend="onnx", device="cpu")
 
     def test_cpu_and_cuda_backends_pin_device(self, monkeypatch):
+        _install_fake_torch(monkeypatch)
         captured: dict = {}
         monkeypatch.setattr(
             privacy_filter, "pipeline", lambda **kw: captured.update(kw) or "PIPE"
@@ -502,25 +565,26 @@ class TestBackendDispatch:
         assert captured["device"] == "cuda"
 
     def test_auto_falls_back_to_cpu_without_cuda(self, monkeypatch):
+        _install_fake_torch(monkeypatch, cuda_available=False)
         captured: dict = {}
         monkeypatch.setattr(
             privacy_filter, "pipeline", lambda **kw: captured.update(kw) or "PIPE"
         )
-        monkeypatch.setattr("torch.cuda.is_available", lambda: False)
         self._build(backend="auto")
         # None == torch's default CPU device: byte-identical to the old 'auto'.
         assert captured["device"] is None
 
     def test_auto_uses_cuda_when_available(self, monkeypatch):
+        _install_fake_torch(monkeypatch, cuda_available=True)
         captured: dict = {}
         monkeypatch.setattr(
             privacy_filter, "pipeline", lambda **kw: captured.update(kw) or "PIPE"
         )
-        monkeypatch.setattr("torch.cuda.is_available", lambda: True)
         self._build(backend="auto")
         assert captured["device"] == "cuda"
 
     def test_explicit_device_overrides_backend(self, monkeypatch):
+        _install_fake_torch(monkeypatch)
         captured: dict = {}
         monkeypatch.setattr(
             privacy_filter, "pipeline", lambda **kw: captured.update(kw) or "PIPE"
