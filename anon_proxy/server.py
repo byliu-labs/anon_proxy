@@ -37,6 +37,7 @@ from anon_proxy.capture import Capturer
 from anon_proxy.client_id import classify_client
 from anon_proxy.config import Config, load_config
 from anon_proxy.default_patterns import DEFAULT_PATTERNS
+from anon_proxy.events import EventSink
 from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker, telemetry_scope
 from anon_proxy.metrics import ProxyMetrics
@@ -47,6 +48,7 @@ from anon_proxy.privacy_filter import (
 )
 from anon_proxy.registry import MaskerRegistry, client_id
 from anon_proxy.regex_detector import RegexDetector
+from anon_proxy.stats import MaskerStats
 from anon_proxy.system_prompt import PLACEHOLDER_SYSTEM_PROMPT
 from anon_proxy.tokens import approx_tokens_from_text, extract_output_tokens
 from anon_proxy.upstream import BUILT_IN_UPSTREAMS, UpstreamConfig, get_upstream_config
@@ -55,7 +57,6 @@ _DIM = "\033[2m"
 _CYAN = "\033[96m"
 _YELLOW = "\033[93m"
 _GREEN = "\033[92m"
-_MAGENTA = "\033[95m"
 _RESET = "\033[0m"
 
 # Adapter registry
@@ -224,23 +225,15 @@ def _log_metrics(
     e2e: float,
     upstream: float,
     usage: dict | None = None,
+    event_sink: EventSink | None = None,
 ) -> None:
     """Print per-turn latency breakdown to stderr."""
-    proxy = max(e2e - upstream, 0.0)
-    pct = (proxy / e2e * 100.0) if e2e > 0 else 0.0
-    token_part = ""
-    if usage is not None:
-        token_part = (
-            f"  tokens: in={usage['input']} cache_read={usage['cache_read']} "
-            f"cache_create={usage['cache_creation']}"
-        )
-    print(
-        f"{_MAGENTA}[metrics {provider}]{_RESET} "
-        f"e2e={e2e * 1000:.1f}ms  upstream={upstream * 1000:.1f}ms  "
-        f"proxy={proxy * 1000:.1f}ms ({pct:.1f}%){token_part}",
-        file=sys.stderr,
+    (event_sink or EventSink()).metrics(
+        provider=provider,
+        e2e=e2e,
+        upstream=upstream,
+        usage=usage,
     )
-    sys.stderr.flush()
 
 
 async def _timed_aiter(
@@ -315,6 +308,8 @@ def build_app(
     backend: str = "auto",
     listen_addr: str | None = None,
     http_client: httpx.AsyncClient | None = None,
+    metrics_summary: MaskerStats | None = None,
+    event_sink: EventSink | None = None,
 ) -> Starlette:
     """Build the Starlette application.
 
@@ -333,9 +328,12 @@ def build_app(
         backend: PII backend label, surfaced on /_status.
         listen_addr: "host:port" label, surfaced on /_status.
         http_client: Injected AsyncClient for tests; a fresh one is made if None.
+        metrics_summary: Optional process-wide mask metrics emitted on shutdown.
+        event_sink: Human/JSON operational event formatter.
     """
+    event_sink = event_sink or EventSink()
     if registry is None:
-        masker = masker or Masker()
+        masker = masker or Masker(stats=metrics_summary, event_sink=event_sink)
     if isinstance(metrics, ProxyMetrics):
         proxy_metrics = metrics
         latency_metrics = False
@@ -363,10 +361,13 @@ def build_app(
             app.state.store_path = store_path
             app.state.backend = backend
             app.state.listen_addr = listen_addr
+            app.state.event_sink = event_sink
             yield
         finally:
             if capture is not None:
                 capture.close()
+            if metrics_summary is not None:
+                event_sink.metrics_summary(metrics_summary.snapshot())
             if owns_client:
                 await client.aclose()
 
@@ -453,6 +454,7 @@ async def _handle_proxy(
     debug: bool = request.app.state.debug
     latency_metrics: bool = request.app.state.latency_metrics
     proxy_metrics: ProxyMetrics = request.app.state.metrics
+    event_sink: EventSink = request.app.state.event_sink
     client_label = classify_client({k.lower(): v for k, v in request.headers.items()})
     capture: Capturer | None = request.app.state.capture
     t_start = time.perf_counter()
@@ -647,6 +649,7 @@ async def _handle_proxy(
                         time.perf_counter() - t_start,
                         upstream_acc[0],
                         usage=usage,
+                        event_sink=event_sink,
                     )
                 if capture is not None:
                     e2e_s = time.perf_counter() - t_start
@@ -725,6 +728,7 @@ async def _handle_proxy(
                     time.perf_counter() - t_start,
                     upstream_acc[0],
                     usage=_extract_usage(resp_json),
+                    event_sink=event_sink,
                 )
             if capture is not None:
                 e2e_s = time.perf_counter() - t_start
@@ -755,7 +759,10 @@ async def _handle_proxy(
 
     if latency_metrics:
         _log_metrics(
-            upstream_config.name, time.perf_counter() - t_start, upstream_acc[0]
+            upstream_config.name,
+            time.perf_counter() - t_start,
+            upstream_acc[0],
+            event_sink=event_sink,
         )
     return Response(
         content=upstream_resp.content,
@@ -930,6 +937,20 @@ def _build_parser():
         default=os.environ.get("ANON_PROXY_METRICS", "").lower()
         in ("1", "true", "yes"),
         help="Log per-turn latency breakdown (e2e, upstream, proxy) to stderr.",
+    )
+    parser.add_argument(
+        "--metrics-summary",
+        action="store_true",
+        default=os.environ.get("ANON_PROXY_METRICS_SUMMARY", "").lower()
+        in ("1", "true", "yes"),
+        help="Log PII-free mask latency/cache/canary aggregates on shutdown.",
+    )
+    parser.add_argument(
+        "--log-json",
+        action="store_true",
+        default=os.environ.get("ANON_PROXY_LOG_JSON", "").lower()
+        in ("1", "true", "yes"),
+        help="Emit supported operational events as PII-free JSON lines.",
     )
     parser.add_argument(
         "--capture",
@@ -1117,6 +1138,8 @@ def main() -> None:
         store = None
 
     registry = None
+    metrics_summary = MaskerStats() if args.metrics_summary else None
+    event_sink = EventSink(log_json=args.log_json)
     masker = (
         Masker(
             filter=pf,
@@ -1125,6 +1148,8 @@ def main() -> None:
             ignore_labels=cfg.ignore_labels,
             canary=canary,
             min_known_entity_len=min_known_entity_len,
+            stats=metrics_summary,
+            event_sink=event_sink,
         )
         if (store is not None or pf is not None or extra_detectors or cfg.ignore_labels)
         else None
@@ -1140,6 +1165,8 @@ def main() -> None:
                 ignore_labels=cfg.ignore_labels,
                 canary=canary,
                 min_known_entity_len=min_known_entity_len,
+                stats=metrics_summary,
+                event_sink=event_sink,
             )
 
         registry = MaskerRegistry(make_masker, store_dir=store_path)
@@ -1173,6 +1200,8 @@ def main() -> None:
         proxy_metrics=ProxyMetrics(),
         backend=args.backend,
         listen_addr=f"{args.host}:{args.port}",
+        metrics_summary=metrics_summary,
+        event_sink=event_sink,
     )
 
     all_providers = sorted({**BUILT_IN_UPSTREAMS, **extra_upstreams}.keys())
@@ -1182,6 +1211,8 @@ def main() -> None:
         f"  providers: {', '.join(all_providers)}\n"
         f"  debug: {args.debug}\n"
         f"  metrics: {args.metrics}\n"
+        f"  metrics_summary: {args.metrics_summary}\n"
+        f"  log_json: {args.log_json}\n"
         f"  capture: {args.capture or '(off)'}\n"
         f"  store: {args.store or '(none)'}\n"
         f"  multi_user: {args.multi_user}\n"

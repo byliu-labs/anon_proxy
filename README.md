@@ -149,6 +149,10 @@ uv run python -m anon_proxy.server [options]
 | `--store <file>` | — | Path to persistent PII mapping store. Loaded at startup; saved after each request with new entries. Enables cross-restart placeholder consistency — see [Persistent store](#persistent-store) below. |
 | `--multi-user` | off | Namespace PII stores by client credential. Requires each masking request to include `x-api-key` or `authorization`; with `--store`, the path is treated as a directory. |
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
+| `--metrics` | off | Log per-turn e2e/upstream/proxy latency to stderr |
+| `--metrics-summary` | off | Emit PII-free p50/p95 mask latency, cache-hit rate, canary counts, and entity counters on shutdown |
+| `--log-json` | off | Emit supported operational events as PII-free JSON lines instead of human text |
+| `--capture <file>` | — | Append sensitive local request/response JSONL plus safe detector metadata; contains raw PII outside the detector metadata |
 | `--config <file>` | — | Unified `config.json` (extra regex patterns, per-label merge-gap overrides, ML labels to skip masking on). See [Config file](#config-file) below. |
 | `--no-default-patterns` | off | Disable built-in regex detectors for common PII and secrets |
 | `--canary warn\|fix\|off` | `warn` | Run regex detectors after masking; `fix` masks any surviving hit before forwarding |
@@ -172,6 +176,27 @@ uv run python -m anon_proxy.server \
   --backend mps \
   --debug
 ```
+
+### Detection telemetry
+
+`--capture` adds `{source, label, score, len}` for each fresh detection to the
+capture record's `timing_ms.detector_calls`. Matched text is never copied into
+that detector metadata, and cache hits do not repeat entity observations. The
+capture file itself still contains unmasked request/response bodies and must be
+treated as sensitive.
+
+Turn capture data into the evidence needed to choose per-label score thresholds:
+
+```bash
+uv run anon-proxy-capture-report /path/to/capture.jsonl
+uv run anon-proxy-capture-report --json /path/to/capture.jsonl
+```
+
+`--metrics-summary` emits process-wide p50/p95 mask latency, mask cache-hit
+rate, entities by label/source, canary hits/hit rate, and unknown placeholder
+counts at shutdown. Add `--log-json` to make metrics, summaries, canary hits,
+and unknown-placeholder warnings machine parseable. JSON events never include
+matched entity text.
 
 ### Fast ONNX backend
 
@@ -508,7 +533,7 @@ See [`SECURITY.md`](SECURITY.md). For a privacy tool, *quietly* is usually bette
 ## Next steps / roadmap
 
 - **Quality assurance** : Enhance PII detection quality tracking and add comprehensive unit/integration tests with benchmarking.
-- **Observability** : Implement structured logging and telemetry for monitoring proxy performance and PII masking metrics.
+- ~~**Observability** : Structured operational logs plus detection, latency, cache, and canary telemetry.~~ ✅
 - ~~**Persistence** : PII mappings can be persisted to disk via `--store` so placeholder consistency survives server restarts.~~ ✅
 - **Usability** : Now supporting Anthropic and OpenAI APIs, but need more compatibility testing and expand to other potential providers.
 - **Dev infrastructure** : Set up CI, contribution guidelines, and project templates to streamline community development.

@@ -14,11 +14,14 @@ jobs:
 
       - name: Run ruff check
         uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.15.20"
 
       - name: Run ruff format check
         uses: astral-sh/ruff-action@v3
         with:
           args: "format --check"
+          version: "0.15.20"
 
   test:
     runs-on: ubuntu-latest

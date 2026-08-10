@@ -70,6 +70,7 @@ Issues = "https://github.com/byliu-labs/anon_proxy/issues"
 
 [project.scripts]
 anon-proxy = "anon_proxy.cli:main"
+anon-proxy-capture-report = "anon_proxy.capture_report:main"
 anon-proxy-menubar = "anon_proxy.menubar.app:main"
 anon-proxy-store = "anon_proxy.store_cli:main"
 
