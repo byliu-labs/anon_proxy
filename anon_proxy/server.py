@@ -1067,10 +1067,10 @@ def _build_parser():
     return parser
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
-    args = _build_parser().parse_args()
+    args = _build_parser().parse_args(argv)
 
     if args.config:
         try:

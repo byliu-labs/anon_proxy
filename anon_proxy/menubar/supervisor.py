@@ -24,6 +24,34 @@ _PLIST_TMPL = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def server_command(args: list[str]) -> list[str]:
+    """argv that launches the proxy server, correct under a PyInstaller bundle.
+
+    In a frozen bundle ``sys.executable`` is the app binary, not a Python
+    interpreter, so ``-m anon_proxy.server`` is meaningless — the bundle's
+    ``__main__`` routes a ``--run-server`` sentinel to the server entry point
+    instead. Outside a bundle we still spawn the interpreter with ``-m``.
+    """
+    if _is_frozen():
+        return [sys.executable, "--run-server", *args]
+    return [sys.executable, "-m", "anon_proxy.server", *args]
+
+
+def menubar_command(args: list[str]) -> list[str]:
+    """argv that launches the menu-bar app, correct under a PyInstaller bundle.
+
+    A frozen bundle already *is* the menu-bar app, so it is re-invoked with no
+    module selector; outside a bundle we spawn ``-m anon_proxy.menubar.app``.
+    """
+    if _is_frozen():
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "anon_proxy.menubar.app", *args]
+
+
 class ProxySupervisor:
     def __init__(
         self, cmd: list[str] | None = None, *, backend: str | None = None
@@ -31,16 +59,10 @@ class ProxySupervisor:
         if cmd is None:
             from anon_proxy.server import default_store_path
 
-            cmd = [
-                sys.executable,
-                "-m",
-                "anon_proxy.server",
-                "--store",
-                str(default_store_path()),
-                "--metrics",
-            ]
+            server_args = ["--store", str(default_store_path()), "--metrics"]
             if backend is not None:
-                cmd += ["--backend", backend]
+                server_args += ["--backend", backend]
+            cmd = server_command(server_args)
         self._cmd = cmd
         self._proc: subprocess.Popen | None = None
 

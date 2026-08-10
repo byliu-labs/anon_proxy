@@ -15,6 +15,7 @@ from anon_proxy.menubar.statusclient import fetch_status
 from anon_proxy.menubar.supervisor import (
     ProxySupervisor,
     install_launch_agent,
+    menubar_command,
     uninstall_launch_agent,
 )
 
@@ -142,7 +143,7 @@ def _run_macos_app(
 
         def _toggle_start_at_login(self, _sender) -> None:
             enabled = not bool(self._cfg["start_at_login"])
-            args = [sys.executable, "-m", "anon_proxy.menubar.app", "--url", self._url]
+            args = menubar_command(["--url", self._url])
             if enabled:
                 install_launch_agent(_LABEL, args)
             else:
