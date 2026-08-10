@@ -8,6 +8,7 @@ Covered:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from types import SimpleNamespace
@@ -19,9 +20,11 @@ from starlette.testclient import TestClient
 
 from anon_proxy.adapters import anthropic as anthropic_adapter
 from anon_proxy.default_patterns import DEFAULT_PATTERNS
+from anon_proxy.events import EventSink
 from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker
 from anon_proxy.registry import MaskerRegistry
+from anon_proxy.stats import MaskerStats
 from anon_proxy.server import (
     _build_parser,
     _effective_patterns,
@@ -475,6 +478,14 @@ class TestBackendFlag:
         args = _build_parser().parse_args(["--backend", "onnx"])
         assert args.backend == "onnx"
 
+    def test_metrics_summary_flag_is_opt_in(self):
+        assert _build_parser().parse_args([]).metrics_summary is False
+        assert _build_parser().parse_args(["--metrics-summary"]).metrics_summary is True
+
+    def test_log_json_flag_is_opt_in(self):
+        assert _build_parser().parse_args([]).log_json is False
+        assert _build_parser().parse_args(["--log-json"]).log_json is True
+
     def test_cpu_mps_cuda_accepted(self):
         assert _build_parser().parse_args(["--backend", "cpu"]).backend == "cpu"
         assert _build_parser().parse_args(["--backend", "mps"]).backend == "mps"
@@ -492,3 +503,33 @@ class TestBackendFlag:
     def test_mlx_weights_cache_flag_removed(self):
         with pytest.raises(SystemExit):
             _build_parser().parse_args(["--mlx-weights-cache", "/tmp/x"])
+
+
+@pytest.mark.anyio
+async def test_metrics_summary_is_emitted_on_shutdown(capsys):
+    stats = MaskerStats()
+    stats.record_mask(elapsed_ms=5, cache_hit=False, entities=[])
+    app = build_app(masker=SimpleNamespace(store=PIIStore()), metrics_summary=stats)
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert '"mask_calls": 1' in capsys.readouterr().err
+
+
+@pytest.mark.anyio
+async def test_metrics_summary_json_is_one_structured_event(capsys):
+    stats = MaskerStats()
+    stats.record_mask(elapsed_ms=5, cache_hit=False, entities=[])
+    app = build_app(
+        masker=SimpleNamespace(store=PIIStore()),
+        metrics_summary=stats,
+        event_sink=EventSink(log_json=True),
+    )
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    event = json.loads(capsys.readouterr().err)
+    assert event["event"] == "metrics_summary"
+    assert event["mask_calls"] == 1

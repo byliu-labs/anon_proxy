@@ -20,5 +20,10 @@ def test_repo_urls_point_at_byliu_labs():
 
 def test_console_scripts_present():
     scripts = _pyproject()["project"]["scripts"]
-    assert set(scripts) == {"anon-proxy", "anon-proxy-menubar", "anon-proxy-store"}
+    assert set(scripts) == {
+        "anon-proxy",
+        "anon-proxy-capture-report",
+        "anon-proxy-menubar",
+        "anon-proxy-store",
+    }
     assert scripts["anon-proxy"] == "anon_proxy.cli:main"

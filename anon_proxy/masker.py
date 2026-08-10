@@ -3,15 +3,16 @@ import contextvars
 import hashlib
 import json
 import re
-import sys
 import threading
 import time
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Protocol
 
 from anon_proxy.known_entities import KnownEntityDetector
+from anon_proxy.events import EventSink
 from anon_proxy.mapping import PIIStore, normalize_label
 from anon_proxy.privacy_filter import PIIEntity, PrivacyFilter
+from anon_proxy.stats import MaskerStats
 
 
 _TELEMETRY: contextvars.ContextVar[list | None] = contextvars.ContextVar(
@@ -25,7 +26,9 @@ def telemetry_scope():
     """Collect per-call masker telemetry into a fresh list for the current task.
 
     Each entry: {"op": "mask"|"unmask"|"unmask_json", "chars": int, "ms": float,
-    "cache_hit": bool (mask only), "skipped": bool (mask, optional)}.
+    "cache_hit": bool (mask only), "skipped": bool (mask, optional),
+    "entities": [{"source": str, "label": str, "score": float, "len": int}, ...]
+    (fresh mask only)}. Entity records never contain matched text.
     Safe under concurrent asyncio tasks — each task gets its own list via contextvars.
     """
     record: list = []
@@ -82,6 +85,8 @@ class Masker:
         cache_size: int = 4096,
         canary: str = "warn",
         min_known_entity_len: int = 6,
+        stats: MaskerStats | None = None,
+        event_sink: EventSink | None = None,
     ) -> None:
         if canary not in {"warn", "fix", "off"}:
             raise ValueError("canary must be one of: warn, fix, off")
@@ -104,6 +109,8 @@ class Masker:
             normalize_label(s) for s in (ignore_labels or ())
         )
         self._cache_size = cache_size
+        self._stats = stats
+        self._events = event_sink or EventSink()
         self._cache_lock = threading.RLock()
         # LRU cache: content_hash -> (entities, masked_text)
         self._cache: OrderedDict[str, tuple[list[PIIEntity], str]] = OrderedDict()
@@ -116,27 +123,18 @@ class Masker:
 
     def mask(self, text: str) -> str:
         record = _TELEMETRY.get()
-        t0 = time.perf_counter() if record is not None else 0.0
+        observed = record is not None or self._stats is not None
+        t0 = time.perf_counter() if observed else 0.0
 
         # Empty / whitespace-only input has no PII by definition — skip both
         # passes (and the cache) so the pipeline is never invoked.
         if not text.strip():
-            return text
+            return self._finish_mask(text, text, t0, skipped=True)
 
         # Fast path: check if this text matches any skip pattern
         for pattern in self._skip_patterns:
             if pattern.search(text):
-                if record is not None:
-                    record.append(
-                        {
-                            "op": "mask",
-                            "chars": len(text),
-                            "ms": (time.perf_counter() - t0) * 1000,
-                            "cache_hit": False,
-                            "skipped": True,
-                        }
-                    )
-                return text  # Skip masking entirely
+                return self._finish_mask(text, text, t0, skipped=True)
 
         # Check cache
         content_hash = _hash_content(text)
@@ -145,16 +143,7 @@ class Masker:
             if cached is not None:
                 self._cache.move_to_end(content_hash)
         if cached is not None:
-            if record is not None:
-                record.append(
-                    {
-                        "op": "mask",
-                        "chars": len(text),
-                        "ms": (time.perf_counter() - t0) * 1000,
-                        "cache_hit": True,
-                    }
-                )
-            return cached[1]
+            return self._finish_mask(text, cached[1], t0, cache_hit=True)
 
         # Pass 0: exact values the store already knows. Cache entries are keyed
         # only by input text, so values learned after a cache fill intentionally
@@ -193,13 +182,20 @@ class Masker:
         canary_hits = self._canary_hits(masked)
         if canary_hits:
             for hit in canary_hits:
-                suffix = " - masking now" if self._canary == "fix" else ""
-                print(
-                    f"warning: canary: {hit.label} {hit.text!r} survived masking{suffix}",
-                    file=sys.stderr,
+                self._events.canary_hit(
+                    label=hit.label,
+                    text=hit.text,
+                    action=self._canary,
                 )
             if self._canary == "fix":
                 masked = self._substitute(masked, canary_hits)
+
+        entity_telemetry = (
+            _entity_telemetry(known_entities, source="known")
+            + _entity_telemetry(regex_entities, source="regex")
+            + _entity_telemetry(ml_entities, source="ml")
+            + _entity_telemetry(canary_hits, source="canary")
+        )
 
         # Detection may race for the same uncached text. That is harmless:
         # PIIStore allocation is idempotent, and both threads write the same
@@ -207,16 +203,41 @@ class Masker:
         self._cache_result(
             content_hash, known_entities + regex_entities + ml_entities, masked
         )
+        return self._finish_mask(text, masked, t0, entities=entity_telemetry)
+
+    def _finish_mask(
+        self,
+        original: str,
+        result: str,
+        started_at: float,
+        *,
+        cache_hit: bool = False,
+        skipped: bool = False,
+        entities: list[dict[str, Any]] | None = None,
+    ) -> str:
+        record = _TELEMETRY.get()
+        if record is None and self._stats is None:
+            return result
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        fields = {
+            "op": "mask",
+            "chars": len(original),
+            "ms": elapsed_ms,
+            "cache_hit": cache_hit,
+        }
+        if skipped:
+            fields["skipped"] = True
+        if entities is not None:
+            fields["entities"] = entities
         if record is not None:
-            record.append(
-                {
-                    "op": "mask",
-                    "chars": len(text),
-                    "ms": (time.perf_counter() - t0) * 1000,
-                    "cache_hit": False,
-                }
+            record.append(fields)
+        if self._stats is not None:
+            self._stats.record_mask(
+                elapsed_ms=elapsed_ms,
+                cache_hit=cache_hit,
+                entities=entities or [],
             )
-        return masked
+        return result
 
     def _cache_result(
         self, content_hash: str, entities: list[PIIEntity], masked: str
@@ -355,12 +376,10 @@ class Masker:
 
         unknown = self._find_unknown_tokens(result)
         for token in unknown:
-            print(
-                f"warning: unmask: unknown placeholder {token} left in response "
-                f"(model may have invented it)",
-                file=sys.stderr,
-            )
+            self._events.unknown_token(token)
         self._last_unknown_count = len(unknown)
+        if self._stats is not None:
+            self._stats.record_unknown_tokens(len(unknown))
         return result
 
     def _find_unknown_tokens(self, text: str) -> list[str]:
@@ -386,6 +405,21 @@ def _drop_placeholder_overlaps(entities: list[PIIEntity], text: str) -> list[PII
         e
         for e in entities
         if not any(e.start < pe and e.end > ps for ps, pe in placeholders)
+    ]
+
+
+def _entity_telemetry(
+    entities: list[PIIEntity], *, source: str
+) -> list[dict[str, Any]]:
+    """Return detector metadata without copying matched PII text."""
+    return [
+        {
+            "source": source,
+            "label": normalize_label(entity.label),
+            "score": round(float(entity.score), 4),
+            "len": entity.end - entity.start,
+        }
+        for entity in entities
     ]
 
 

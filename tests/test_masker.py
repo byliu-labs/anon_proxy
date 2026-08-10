@@ -13,14 +13,22 @@ Sub-phases will accumulate here:
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import io
+import json
 import re
 
 import pytest
 
+from anon_proxy.events import EventSink
 from anon_proxy.masker import Masker
-from anon_proxy.masker import _drop_placeholder_overlaps, _resolve_overlaps
+from anon_proxy.masker import (
+    _drop_placeholder_overlaps,
+    _resolve_overlaps,
+    telemetry_scope,
+)
 from anon_proxy.privacy_filter import PIIEntity
 from anon_proxy.regex_detector import RegexDetector
+from anon_proxy.stats import MaskerStats
 
 from .conftest import span
 
@@ -266,6 +274,65 @@ class TestMlOnlyPath:
         assert m.mask(text) == "Hello <PERSON_1>"
 
 
+class TestEntityTelemetry:
+    def test_fresh_mask_records_safe_entity_metadata(self, make_masker, fake_pipeline):
+        m = make_masker(min_known_entity_len=0)
+        text = "Hello Bob"
+        fake_pipeline.set(text, [span("PERSON", 6, 9, score=0.91)])
+
+        with telemetry_scope() as calls:
+            assert m.mask(text) == "Hello <PERSON_1>"
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["entities"] == [
+            {"source": "ml", "label": "PERSON", "score": 0.91, "len": 3}
+        ]
+        assert "Bob" not in json.dumps(mask_call)
+
+    def test_cache_hit_does_not_repeat_entity_observations(
+        self, make_masker, fake_pipeline
+    ):
+        m = make_masker(min_known_entity_len=0)
+        text = "Hello Bob"
+        fake_pipeline.set(text, [span("PERSON", 6, 9, score=0.91)])
+        m.mask(text)
+
+        with telemetry_scope() as calls:
+            m.mask(text)
+
+        mask_call = next(call for call in calls if call["op"] == "mask")
+        assert mask_call["cache_hit"] is True
+        assert "entities" not in mask_call
+
+    def test_masker_feeds_session_stats_for_fresh_cache_and_canary_hits(
+        self, make_filter, store, fake_pipeline
+    ):
+        stats = MaskerStats()
+        detector = RegexDetector({"EMAIL": r"[\w.]+@[\w.]+"})
+        masker = Masker(
+            filter=make_filter(),
+            store=store,
+            extra_detectors=[detector],
+            skip_patterns=[],
+            canary="warn",
+            min_known_entity_len=0,
+            stats=stats,
+        )
+        masker._pre_detectors = []
+        text = "Contact bob@example.com"
+        fake_pipeline.set(text, [])
+
+        masker.mask(text)
+        masker.mask(text)
+        masker.unmask("<UNKNOWN_1>")
+
+        snapshot = stats.snapshot()
+        assert snapshot["mask_calls"] == 2
+        assert snapshot["mask_cache_hits"] == 1
+        assert snapshot["canary_hits"] == 1
+        assert snapshot["unknown_tokens"] == 1
+
+
 class TestPostMaskCanary:
     def test_warn_mode_logs_and_forwards(self, make_masker, capsys):
         m = make_masker(
@@ -312,6 +379,30 @@ class TestPostMaskCanary:
         m.mask("contact bob@x.com ok")
 
         assert "canary" not in capsys.readouterr().err
+
+    def test_json_sink_receives_pii_free_canary_event(self, make_filter, store):
+        stream = io.StringIO()
+        masker = Masker(
+            filter=make_filter(),
+            store=store,
+            extra_detectors=[RegexDetector({"EMAIL": r"[\w.]+@[\w.]+"})],
+            skip_patterns=[],
+            canary="warn",
+            min_known_entity_len=0,
+            event_sink=EventSink(log_json=True, stream=stream),
+        )
+        masker._pre_detectors = []
+
+        masker.mask("contact bob@example.com")
+
+        event = json.loads(stream.getvalue())
+        assert event == {
+            "event": "canary_hit",
+            "label": "EMAIL",
+            "len": 15,
+            "action": "warn",
+        }
+        assert "bob@example.com" not in stream.getvalue()
 
     @pytest.mark.parametrize("canary", ["loud", "", "WARN"])
     def test_canary_rejects_unknown_modes(self, canary, make_filter, store):
