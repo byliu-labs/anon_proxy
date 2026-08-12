@@ -1,0 +1,3 @@
+# Opt-in sentinel for ~/.claude/hooks/check-context-map-fresh.sh (advisory).
+# The map lives at the default path:
+map: docs/context-map.yaml
