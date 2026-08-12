@@ -1,0 +1,35 @@
+# Context ownership map — code globs → the doc that owns their context.
+#
+# Read by ~/.claude/hooks/check-context-map-fresh.sh (advisory, PreToolUse `git commit`,
+# opt-in sentinel .claude/context-map-required): when a commit stages files matching an
+# entry's `watch` patterns but does NOT stage that entry's `doc`, it prints a nudge to
+# update the doc in the same commit (or override with `context-map-ok: <reason>`).
+# It also warns when a watch pattern matches nothing in the repo.
+#
+# ── The context tree this map governs ─────────────────────────────────────────────
+# L0  CLAUDE.md (= AGENTS.md symlink)   laws + architecture + index
+# L2  anon_proxy/**/CLAUDE.md           package leaves, delta only, AGENTS.md symlinked
+#
+# Anti-rot rules: one fact one level; no volatile values; docs die with code; only map
+# docs someone maintains.
+
+version: 1
+entries:
+  # Masking core: layering contract and detector-ordering invariant. Changing the
+  # detector pipeline or the store without touching this leaf hides the invariant.
+  - doc: anon_proxy/CLAUDE.md
+    watch:
+      - '^anon_proxy/[^/]+\.py$'
+
+  # Provider adapters: the three-entrypoint contract and the "text lives in more places
+  # than messages[]" rule. A new provider must land with its leaf row.
+  - doc: anon_proxy/adapters/CLAUDE.md
+    watch:
+      - '^anon_proxy/adapters/.*\.py$'
+
+  # User-facing setup: flags, env vars, container entrypoint. The README is the only
+  # install instruction anyone reads.
+  - doc: README.md
+    watch:
+      - '^(Dockerfile|docker-entrypoint\.sh|pyproject\.toml)$'
+      - '^config\.json\.example$'

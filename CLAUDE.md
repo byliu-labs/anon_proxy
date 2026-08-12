@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Context tree.** L0 (this file) = orientation + laws + index. L2 = `anon_proxy/CLAUDE.md`
+and `anon_proxy/adapters/CLAUDE.md` package leaves, auto-loaded when you work in those
+directories. A child never restates this file — it links up. Ownership map:
+[`docs/context-map.yaml`](docs/context-map.yaml); the advisory `check-context-map-fresh.sh`
+hook nudges when mapped code changes without its owning doc. `AGENTS.md` is a symlink to
+this file, so Codex and Claude read one source.
+
 ## Project overview
 
 An LLM API proxy that transparently masks PII before requests leave the device and unmasks it in responses. The OpenAI Privacy Filter model runs locally — raw PII never reaches the upstream API.
@@ -58,4 +65,30 @@ Server flags (all have `ANON_PROXY_*` env var equivalents):
 - `uv` as package manager — use `uv add <pkg>` for dependencies
 - `uvicorn` for server (ASGI)
 - `transformers` + `torch` for local PII model
-- No tests, lint, or CI yet — add alongside first real module
+- `pytest` for tests, `ruff` for lint, GitHub Actions CI (`.github/workflows/ci.yml`)
+- `bash presubmit.sh` before pushing — it runs what CI runs
+
+## Masking invariants (Never Violate)
+
+The whole product is "raw PII never leaves the device." Each of these is covered by a
+test today; none may be relaxed for convenience:
+
+- **Placeholders are stable per store, not per request.** The same entity gets the same
+  placeholder across turns — that is what keeps the model coherent. Never mint a fresh
+  placeholder for an entity already in `PIIStore`
+  (`test_same_canonical_returns_same_placeholder_no_counter_bump`).
+- **Unmask is the exact inverse of mask**, in streaming and non-streaming paths alike,
+  including a placeholder split across two SSE deltas
+  (`test_placeholder_split_across_two_deltas`).
+- **Masking failures are not swallowed.** `adapter.mask_request` is deliberately *not*
+  wrapped in a `try/except` at its `server.py` call site: a detector or adapter error
+  fails the request rather than forwarding it raw. Do not add a catch there.
+
+### The known passthrough gaps (deliberate, but they ARE gaps)
+
+`_handle_proxy` forwards the body **unmasked** when it is empty, `multipart/form-data`,
+or not valid JSON, and `_should_mask_request` exempts `count_tokens` (masking changes
+text length, so the count would be wrong anyway). These are decisions, not oversights —
+but they mean "nothing unmasked ever leaves" is not literally true. Before widening a
+passthrough, add the test first; before narrowing one, check the `count_tokens` length
+argument still holds.

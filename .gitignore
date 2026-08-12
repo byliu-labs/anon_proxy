@@ -12,7 +12,12 @@ wheels/
 fzxu_git.sh
 *.json
 *.jsonl
-.claude/
+
+# The context-tree opt-in sentinel MUST be tracked: without it in a fresh clone the
+# check-context-map-fresh.sh hook silently never fires. Everything else under .claude/
+# (settings, worktrees, local state) stays ignored.
+.claude/*
+!.claude/context-map-required
 
 # Personal process artifacts (design specs + implementation plans)
 # These are working notes for the maintainer, not public docs.
