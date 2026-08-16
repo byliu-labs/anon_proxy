@@ -41,7 +41,7 @@ jobs:
           uv run --extra torch anon-proxy-eval tests/data/pii_corpus.jsonl
           --backend torch
           --json
-          --fail-under-recall PERSON=0.50,EMAIL=0.50,PHONE=0.40,ADDRESS=0.30,ORGANIZATION=0.30,DATE=0.30
+          --fail-under-recall PERSON=0.50,EMAIL=0.50,PHONE=0.40,ADDRESS=0.30,DATE=0.30,URL=0.30,ACCOUNT_NUMBER=0.30,SECRET=0.30
           > detection-eval.json
 
       - name: Upload detection report

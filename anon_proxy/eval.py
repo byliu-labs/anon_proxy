@@ -10,6 +10,19 @@ from typing import Iterable, Protocol, TypedDict
 from anon_proxy.mapping import normalize_label
 from anon_proxy.privacy_filter import PIIEntity, PrivacyFilter
 
+SUPPORTED_MODEL_LABELS = frozenset(
+    {
+        "ACCOUNT_NUMBER",
+        "ADDRESS",
+        "DATE",
+        "EMAIL",
+        "PERSON",
+        "PHONE",
+        "SECRET",
+        "URL",
+    }
+)
+
 
 @dataclass(frozen=True)
 class LabeledSpan:
@@ -22,7 +35,7 @@ class LabeledSpan:
             raise ValueError("span start must be >= 0")
         if self.end <= self.start:
             raise ValueError("span end must be greater than start")
-        object.__setattr__(self, "label", normalize_label(self.label))
+        object.__setattr__(self, "label", _normalize_model_label(self.label))
 
 
 @dataclass(frozen=True)
@@ -232,12 +245,26 @@ def _parse_recall_floors(value: str | None) -> dict[str, float]:
             continue
         try:
             label, floor = item.split("=", 1)
-            floors[normalize_label(label)] = float(floor)
+            normalized_label = _normalize_model_label(label)
+            if normalized_label not in SUPPORTED_MODEL_LABELS:
+                raise ValueError(
+                    f"unsupported recall floor label {label!r}; expected one of "
+                    f"{sorted(SUPPORTED_MODEL_LABELS)!r}"
+                )
+            floors[normalized_label] = float(floor)
         except ValueError as error:
+            if "unsupported recall floor label" in str(error):
+                raise
             raise ValueError(
                 "--fail-under-recall must be comma-separated LABEL=FLOAT entries"
             ) from error
     return floors
+
+
+def _normalize_model_label(label: str) -> str:
+    if len(label) > 2 and label[1] == "-" and label[0] in "BIES":
+        label = label[2:]
+    return normalize_label(label)
 
 
 def _floor_failures(report: dict, floors: dict[str, float]) -> list[str]:

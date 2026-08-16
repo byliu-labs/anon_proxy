@@ -1,6 +1,12 @@
 import pytest
 
-from anon_proxy.eval import LabeledSpan, aggregate, load_corpus
+from anon_proxy.eval import (
+    SUPPORTED_MODEL_LABELS,
+    LabeledSpan,
+    _parse_recall_floors,
+    aggregate,
+    load_corpus,
+)
 
 
 def test_perfect_predictions_score_one_for_every_label():
@@ -107,6 +113,18 @@ def test_load_corpus_reads_jsonl_and_normalizes_labels(tmp_path):
     assert example.spans == [LabeledSpan(start=0, end=5, label="PERSON")]
 
 
+def test_labeled_span_normalizes_bioes_model_labels():
+    assert LabeledSpan(start=0, end=5, label="B-private_person").label == "PERSON"
+    assert (
+        LabeledSpan(start=0, end=5, label="S-ACCOUNT_NUMBER").label == "ACCOUNT_NUMBER"
+    )
+
+
+def test_recall_floors_reject_labels_the_model_never_emits():
+    with pytest.raises(ValueError, match="unsupported recall floor label"):
+        _parse_recall_floors("ORGANIZATION=0.3")
+
+
 def test_load_corpus_rejects_invalid_span_bounds(tmp_path):
     path = tmp_path / "corpus.jsonl"
     path.write_text(
@@ -128,8 +146,9 @@ def test_committed_corpus_schema_is_valid():
         "EMAIL",
         "PHONE",
         "ADDRESS",
-        "ORGANIZATION",
         "DATE",
+        "URL",
+        "ACCOUNT_NUMBER",
         "SECRET",
-        "GOVT_ID",
     }.issubset(labels)
+    assert labels <= SUPPORTED_MODEL_LABELS
