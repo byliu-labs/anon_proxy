@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator, Callable
 
 from anon_proxy.adapters._streaming import split_at_last_open
+from anon_proxy.adapters.openai_responses import unmask_responses_value
 from anon_proxy.masker import Masker
 
 
@@ -341,25 +342,4 @@ def _transform_responses_event(
             yield event_type, json.dumps({**data, "delta": unmasked})
         return
 
-    if response_type == "response.function_call_arguments.done":
-        arguments = data.get("arguments")
-        if isinstance(arguments, str):
-            unmasked = masker.unmask_json(arguments)
-            if on_substitution and arguments != unmasked:
-                on_substitution(arguments, unmasked)
-            yield event_type, json.dumps({**data, "arguments": unmasked})
-        else:
-            yield event_type, json.dumps(data)
-        return
-
-    yield event_type, json.dumps(_walk_strings(data, masker.unmask))
-
-
-def _walk_strings(value, transform):
-    if isinstance(value, str):
-        return transform(value)
-    if isinstance(value, dict):
-        return {k: _walk_strings(v, transform) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_walk_strings(v, transform) for v in value]
-    return value
+    yield event_type, json.dumps(unmask_responses_value(data, masker))

@@ -910,6 +910,56 @@ class TestOpenAIResponsesStreaming:
         assert json.loads("".join(_responses_arguments(out))) == {"name": 'Bob"X\\Y'}
         assert b"<SECRET_1>" not in out
 
+    async def test_response_completed_output_arguments_are_json_escaped(
+        self, make_filter, store
+    ):
+        m = _make_masker_with_tokens(make_filter, store, ("SECRET", 'Bob"X\\Y'))
+        chunks = [
+            _oai_event(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "arguments": json.dumps({"name": "<SECRET_1>"}),
+                            }
+                        ]
+                    },
+                }
+            )
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+        event = json.loads(out.decode().split("data: ", 1)[1])
+        arguments = event["response"]["output"][0]["arguments"]
+
+        assert json.loads(arguments) == {"name": 'Bob"X\\Y'}
+        assert b"<SECRET_1>" not in out
+
+    async def test_response_output_item_done_arguments_are_json_escaped(
+        self, make_filter, store
+    ):
+        m = _make_masker_with_tokens(make_filter, store, ("SECRET", 'Bob"X\\Y'))
+        chunks = [
+            _oai_event(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "arguments": json.dumps({"name": "<SECRET_1>"}),
+                    },
+                }
+            )
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+        event = json.loads(out.decode().split("data: ", 1)[1])
+        arguments = event["item"]["arguments"]
+
+        assert json.loads(arguments) == {"name": 'Bob"X\\Y'}
+        assert b"<SECRET_1>" not in out
+
 
 # ---------------------------------------------------------------------------
 # Phase 4c: decode-failure / passthrough robustness contracts.
