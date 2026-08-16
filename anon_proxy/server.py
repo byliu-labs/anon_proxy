@@ -573,11 +573,7 @@ async def _handle_proxy(
     api_path = "/" + path_parts[1] if len(path_parts) > 1 else "/"
 
     # Build upstream URL
-    upstream_url = urljoin(
-        upstream_config.base_url.rstrip("/") + "/",
-        upstream_config.path_prefix.strip("/"),
-    )
-    upstream_url = urljoin(upstream_url.rstrip("/") + "/", api_path.lstrip("/"))
+    upstream_url = _build_upstream_url(upstream_config, api_path)
 
     # For non-POST/PUT/DELETE requests with no body, just proxy through
     if request.method in ("GET", "HEAD", "OPTIONS"):
@@ -890,6 +886,15 @@ def _safe_metric(fn, *args) -> None:
         fn(*args)
     except Exception as e:
         print(f"error: proxy metrics failed: {e}", file=sys.stderr)
+
+
+def _build_upstream_url(upstream_config: UpstreamConfig, api_path: str) -> str:
+    base = upstream_config.base_url.rstrip("/") + "/"
+    prefix = upstream_config.path_prefix.strip("/")
+    path = api_path.lstrip("/")
+    if prefix and path != prefix and not path.startswith(prefix + "/"):
+        path = f"{prefix}/{path}"
+    return urljoin(base, path)
 
 
 async def _maybe_save_store(

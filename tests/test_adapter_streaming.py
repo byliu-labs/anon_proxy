@@ -760,6 +760,39 @@ class TestOpenAIPassthrough:
         assert b"not valid json" in out
 
 
+@pytest.mark.asyncio
+class TestOpenAIToolCallFlush:
+    async def test_tool_call_arguments_buffer_flushes_on_done(self, make_filter, store):
+        m = _make_masker_with_tokens(make_filter, store, ("PERSON", "Alice"))
+        chunks = [
+            _oai_event(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {
+                                            "arguments": '{"name":"<PERSON_1>'
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            _oai_event("[DONE]"),
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+
+        assert b"Alice" in out
+        assert b"<PERSON_1>" not in out
+        assert b"[DONE]" in out
+
+
 # ---------------------------------------------------------------------------
 # Phase 4c: decode-failure / passthrough robustness contracts.
 #

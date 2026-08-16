@@ -1,0 +1,3 @@
+data: {"choices":[{"index":0,"delta":{"content":"I will call <PERSON_1> today"}}]}
+
+data: [DONE]

@@ -249,6 +249,24 @@ class TestUnmaskResponseShape:
         body = {"id": "x"}
         assert oai.unmask_response(body, masker) == body
 
+    def test_responses_api_output_text_and_output_are_unmasked(self, masker, store):
+        store.get_or_create("PERSON", "Alice")
+        body = {
+            "id": "resp_1",
+            "output_text": "Hi <PERSON_1>",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Hi <PERSON_1>"}],
+                }
+            ],
+        }
+
+        out = oai.unmask_response(body, masker)
+
+        assert out["output_text"] == "Hi Alice"
+        assert out["output"][0]["content"][0]["text"] == "Hi Alice"
+
 
 class TestUnmaskResponseContent:
     def test_string_content_unmasked(self, masker, store):
@@ -353,6 +371,12 @@ class TestInjectSystem:
         body = {"model": "gpt-4o", "input": "hello"}
         out = oai.inject_system(body, self.PROMPT)
         assert "messages" not in out
+        assert out["instructions"] == self.PROMPT
+
+    def test_responses_api_instructions_are_prepended(self):
+        body = {"model": "gpt-4o", "input": "hello", "instructions": "Be terse."}
+        out = oai.inject_system(body, self.PROMPT)
+        assert out["instructions"] == f"{self.PROMPT}\n\nBe terse."
 
     def test_empty_messages_inserts_system(self):
         body = {"messages": []}

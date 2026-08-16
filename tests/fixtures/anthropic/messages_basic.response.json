@@ -1,0 +1,15 @@
+{
+  "id": "msg_compat_1",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I will call <PERSON_1> today"
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 8
+  }
+}

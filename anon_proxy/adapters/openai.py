@@ -12,9 +12,11 @@ Unmasked on inbound: message content, function arguments, tool call outputs.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable
 
-from anon_proxy.adapters._streaming import split_at_last_open
+from anon_proxy.adapters.openai_streaming import (
+    _is_complete_json as _is_complete_json,
+    transform_stream as transform_stream,
+)
 from anon_proxy.masker import Masker
 from anon_proxy.policy import Policy, mask_body
 
@@ -56,6 +58,12 @@ def inject_system(body: dict, prompt: str) -> dict:
     """
     result = dict(body)
     if "messages" not in body:
+        if "input" in body:
+            existing = body.get("instructions")
+            if isinstance(existing, str) and existing:
+                result["instructions"] = f"{prompt}\n\n{existing}"
+            else:
+                result["instructions"] = prompt
         return result
     messages = list(body.get("messages") or [])
     if (
@@ -84,6 +92,12 @@ def unmask_response(body: dict, masker: Masker) -> dict:
     choices = body.get("choices")
     if isinstance(choices, list):
         result["choices"] = [_unmask_choice(c, masker) for c in choices]
+    output_text = body.get("output_text")
+    if isinstance(output_text, str):
+        result["output_text"] = masker.unmask(output_text)
+    output = body.get("output")
+    if isinstance(output, list):
+        result["output"] = _walk_strings(output, masker.unmask)
     return result
 
 
@@ -155,234 +169,3 @@ def _walk_strings(value, transform):
     if isinstance(value, list):
         return [_walk_strings(v, transform) for v in value]
     return value
-
-
-# Stream handling for OpenAI
-_STREAM_HANDLERS: dict[str, dict] = {
-    "content": {"delta_key": "content", "content_field": "content", "escape": False},
-    "tool_calls": {
-        "delta_key": "tool_calls",
-        "content_field": "arguments",
-        "escape": True,
-    },
-}
-
-
-async def transform_stream(
-    upstream_bytes: AsyncIterator[bytes],
-    masker: Masker,
-    *,
-    on_substitution: Callable[[str, str], None] | None = None,
-    on_usage: Callable[[dict], None] | None = None,
-) -> AsyncIterator[bytes]:
-    """Unmask masked payloads in an OpenAI SSE stream.
-
-    OpenAI streaming format:
-    - data: {"choices": [{"delta": {"content": "..."}, ...}]}
-    - data: [DONE] at end
-
-    Handles content deltas and tool_calls.function.arguments deltas.
-
-    For content deltas, we buffer chunks to handle placeholders that may be
-    split across multiple events (e.g., "<PERSON_2>" might come as "PERSON", "_", "2", ">").
-    """
-    tool_call_buffers: dict[int, str] = {}
-    content_buffer = [""]  # Buffer for accumulating content chunks (mutable list)
-    raw = b""
-
-    async for chunk in upstream_bytes:
-        raw += chunk
-        while b"\n\n" in raw:
-            event_bytes, raw = raw.split(b"\n\n", 1)
-            event_type, data_str = _parse_sse(event_bytes)
-
-            if data_str == "[DONE]":
-                # Flush any remaining content buffer before DONE
-                if content_buffer[0]:
-                    buffered = content_buffer[0]
-                    unmasked = masker.unmask(buffered)
-                    if on_substitution and buffered != unmasked:
-                        on_substitution(buffered, unmasked)
-                    # Yield a synthetic event with the buffered content
-                    yield _serialize_sse(
-                        event_type,
-                        json.dumps({"choices": [{"delta": {"content": unmasked}}]}),
-                    )
-                    content_buffer[0] = ""
-                yield _serialize_sse(event_type, data_str)
-                continue
-
-            for out_event, out_data in _transform_event(
-                event_type,
-                data_str,
-                masker,
-                tool_call_buffers,
-                content_buffer,
-                on_substitution,
-                on_usage,
-            ):
-                yield _serialize_sse(out_event, out_data)
-
-    # Flush any remaining content
-    if content_buffer[0]:
-        buffered = content_buffer[0]
-        unmasked = masker.unmask(buffered)
-        if on_substitution and buffered != unmasked:
-            on_substitution(buffered, unmasked)
-        yield _serialize_sse(
-            None, json.dumps({"choices": [{"delta": {"content": unmasked}}]})
-        )
-
-    if raw.strip():
-        yield raw
-
-
-def _parse_sse(event_bytes: bytes) -> tuple[str | None, str | None]:
-    """Parse an SSE event."""
-    event_type: str | None = None
-    data_parts: list[str] = []
-    for line in event_bytes.decode("utf-8", errors="replace").splitlines():
-        if line.startswith(":") or not line:
-            continue
-        if line.startswith("event:"):
-            event_type = line[len("event:") :].strip()
-        elif line.startswith("data:"):
-            chunk = line[len("data:") :]
-            if chunk.startswith(" "):
-                chunk = chunk[1:]
-            data_parts.append(chunk)
-    data = "\n".join(data_parts) if data_parts else None
-    return event_type, data
-
-
-def _serialize_sse(event_type: str | None, data: str | None) -> bytes:
-    """Serialize an SSE event."""
-    lines: list[str] = []
-    if event_type:
-        lines.append(f"event: {event_type}")
-    if data is not None:
-        lines.append(f"data: {data}")
-    return ("\n".join(lines) + "\n\n").encode("utf-8")
-
-
-def _transform_event(
-    event_type: str | None,
-    data_str: str | None,
-    masker: Masker,
-    tool_call_buffers: dict[int, str],
-    content_buffer: list[str],  # Changed to mutable list to allow modification
-    on_substitution: Callable[[str, str], None] | None,
-    on_usage: Callable[[dict], None] | None,
-):
-    """Transform a single SSE event.
-
-    Content buffering: We accumulate content chunks and emit when:
-    1. Unmasking succeeds (no placeholders remain in buffer)
-    2. Content starts with '<' (new placeholder starting - emit previous content)
-    3. Buffer gets too long AND has no unclosed '<' (avoid unbounded buffering)
-    """
-    if data_str is None or data_str == "[DONE]":
-        yield event_type, data_str
-        return
-
-    try:
-        data = json.loads(data_str)
-    except json.JSONDecodeError:
-        yield event_type, data_str
-        return
-
-    usage = data.get("usage")
-    if isinstance(usage, dict) and on_usage is not None:
-        on_usage(usage)
-
-    choices = data.get("choices", [])
-    if not isinstance(choices, list):
-        yield event_type, data_str
-        return
-
-    transformed = False
-    for choice in choices:
-        delta = choice.get("delta", {})
-        if not isinstance(delta, dict):
-            continue
-
-        # Handle content delta — unified flush rule with Anthropic:
-        # emit everything up to the last unterminated '<' (a potentially
-        # incomplete placeholder); hold the rest in `content_buffer` until
-        # the next chunk completes it. No size cap — placeholders are
-        # bounded by label length plus `_<digits>`.
-        content = delta.get("content")
-        if isinstance(content, str):
-            content_buffer[0] += content
-            emittable, remainder = split_at_last_open(content_buffer[0])
-            content_buffer[0] = remainder
-            if emittable:
-                unmasked = masker.unmask(emittable)
-                if on_substitution and emittable != unmasked:
-                    on_substitution(emittable, unmasked)
-                choice["delta"]["content"] = unmasked
-                yield event_type, json.dumps(data)
-            # else: nothing safe to emit yet; suppress this delta event.
-            transformed = True
-            break
-
-        # If content is None, emit any buffered content
-        if content is None:
-            if content_buffer[0]:
-                buffered = content_buffer[0]
-                unmasked = masker.unmask(buffered)
-                if on_substitution and buffered != unmasked:
-                    on_substitution(buffered, unmasked)
-                choice["delta"]["content"] = unmasked
-                content_buffer[0] = ""
-                yield event_type, json.dumps(data)
-                transformed = True
-                break
-            # No content and no buffer - pass through
-            yield event_type, json.dumps(data)
-            transformed = True
-            break
-
-        # Handle tool_calls delta
-        tool_calls = delta.get("tool_calls")
-        if isinstance(tool_calls, list) and tool_calls:
-            for tc in tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                tc_index = tc.get("index", 0)
-                function = tc.get("function", {})
-                if isinstance(function, dict):
-                    args_delta = function.get("arguments", "")
-                    if isinstance(args_delta, str) and args_delta:
-                        # Accumulate arguments for this tool call
-                        buf = tool_call_buffers.get(tc_index, "")
-                        buf += args_delta
-                        tool_call_buffers[tc_index] = buf
-
-                        # Try to emit complete JSON chunks
-                        if _is_complete_json(buf):
-                            unmasked = masker.unmask_json(buf)
-                            if on_substitution and buf != unmasked:
-                                on_substitution(buf, unmasked)
-                            tc["function"]["arguments"] = unmasked
-                            tool_call_buffers[tc_index] = ""
-                        else:
-                            # Incomplete JSON, keep masked
-                            tc["function"]["arguments"] = args_delta
-
-            yield event_type, json.dumps(data)
-            transformed = True
-            break
-
-    # If no delta processing happened, pass through
-    if not transformed:
-        yield event_type, data_str
-
-
-def _is_complete_json(s: str) -> bool:
-    """Check if a string is complete JSON (balanced braces)."""
-    try:
-        json.loads(s)
-        return True
-    except json.JSONDecodeError:
-        return False
