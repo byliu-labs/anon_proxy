@@ -151,6 +151,7 @@ uv run python -m anon_proxy.server [options]
 | `--debug` | off | Log new store entries and masked/unmasked diffs to stderr |
 | `--metrics` | off | Log per-turn e2e/upstream/proxy latency to stderr |
 | `--metrics-summary` | off | Emit PII-free p50/p95 mask latency, cache-hit rate, canary counts, and entity counters on shutdown |
+| `--metrics-file <file>` | — | Append PII-free aggregate rollups as JSONL for dashboards or post-hoc analysis |
 | `--log-json` | off | Emit supported operational events as PII-free JSON lines instead of human text |
 | `--capture <file>` | — | Append sensitive local request/response JSONL plus safe detector metadata; contains raw PII outside the detector metadata |
 | `--config <file>` | — | Unified `config.json` (extra regex patterns, per-label merge-gap overrides, ML labels to skip masking on). See [Config file](#config-file) below. |
@@ -192,11 +193,12 @@ uv run anon-proxy-capture-report /path/to/capture.jsonl
 uv run anon-proxy-capture-report --json /path/to/capture.jsonl
 ```
 
-`--metrics-summary` emits process-wide p50/p95 mask latency, mask cache-hit
+`/_status` exposes live detection aggregates: p50/p95/p99 mask latency, cache-hit
 rate, entities by label/source, canary hits/hit rate, and unknown placeholder
-counts at shutdown. Add `--log-json` to make metrics, summaries, canary hits,
-and unknown-placeholder warnings machine parseable. JSON events never include
-matched entity text.
+counts. `--metrics-summary` also emits those aggregates at shutdown. Add
+`--log-json` to make metrics, summaries, canary hits, and unknown-placeholder
+warnings machine parseable. JSON events never include matched entity text. The
+versioned schema contract is documented in [docs/observability.md](docs/observability.md).
 
 ### Fast ONNX backend
 

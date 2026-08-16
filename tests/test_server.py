@@ -8,6 +8,7 @@ Covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -23,12 +24,14 @@ from anon_proxy.default_patterns import DEFAULT_PATTERNS
 from anon_proxy.events import EventSink
 from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker
+from anon_proxy.metrics import ProxyMetrics
 from anon_proxy.registry import MaskerRegistry
 from anon_proxy.stats import MaskerStats
 from anon_proxy.server import (
     _build_parser,
     _effective_patterns,
     _extract_usage,
+    _metrics_file_loop,
     build_app,
     _maybe_save_store,
     _should_mask_request,
@@ -61,6 +64,15 @@ def test_default_store_path_under_private_state_dir(tmp_path, monkeypatch):
     assert path == tmp_path / "anon-proxy" / "store.json"
     assert path.parent.is_dir()
     assert (path.parent.stat().st_mode & 0o777) == 0o700
+
+
+def test_metrics_file_interval_must_be_positive_at_build_time(tmp_path):
+    with pytest.raises(ValueError, match="metrics_file_interval must be > 0"):
+        build_app(
+            masker=SimpleNamespace(store=PIIStore()),
+            metrics_file=str(tmp_path / "metrics.jsonl"),
+            metrics_file_interval=0,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +545,72 @@ async def test_metrics_summary_json_is_one_structured_event(capsys):
     event = json.loads(capsys.readouterr().err)
     assert event["event"] == "metrics_summary"
     assert event["mask_calls"] == 1
+
+
+@pytest.mark.anyio
+async def test_metrics_file_loop_logs_write_errors_and_continues(monkeypatch, capsys):
+    from anon_proxy import server
+
+    calls = 0
+    second_call = asyncio.Event()
+
+    async def flaky_rollup(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("disk full")
+        second_call.set()
+
+    monkeypatch.setattr(server, "_write_metrics_rollup", flaky_rollup)
+    task = asyncio.create_task(
+        _metrics_file_loop(
+            "/tmp/metrics.jsonl",
+            ProxyMetrics(started_at=0.0),
+            MaskerStats(),
+            0.001,
+        )
+    )
+    try:
+        await asyncio.wait_for(second_call.wait(), timeout=1)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert calls >= 2
+    assert "error: metrics file rollup failed: disk full" in capsys.readouterr().err
+
+
+@pytest.mark.anyio
+async def test_metrics_file_shutdown_error_does_not_skip_cleanup(monkeypatch, tmp_path):
+    from anon_proxy import server
+
+    closed = {"capture": False, "client": False}
+
+    class FakeCapture:
+        def close(self):
+            closed["capture"] = True
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def aclose(self):
+            closed["client"] = True
+
+    async def failing_rollup(*_args):
+        raise OSError("readonly")
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(server, "_write_metrics_rollup", failing_rollup)
+    app = build_app(
+        masker=SimpleNamespace(store=PIIStore()),
+        capture=FakeCapture(),
+        metrics_file=str(tmp_path / "metrics.jsonl"),
+        metrics_file_interval=3600,
+    )
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert closed == {"capture": True, "client": True}
