@@ -1,0 +1,53 @@
+name: Benchmark
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: benchmark
+  cancel-in-progress: true
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Cache Hugging Face model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-privacy-filter-bench-v1
+          restore-keys: |
+            hf-privacy-filter-bench-
+
+      - name: Install dependencies (torch + onnx)
+        run: uv sync --extra torch --extra onnx --dev
+
+      - name: Run synthetic benchmark gate
+        run: >
+          uv run --extra torch --extra onnx anon-proxy-bench synthetic
+          --backend torch
+          --backend onnx
+          --json
+          --baseline docs/local/benchmarks/baseline.json
+          --fail-under-ratio 2.0
+          > bench.json
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark
+          path: bench.json

@@ -1,0 +1,40 @@
+{"id":"person-basic","text":"My name is Alice Smith.","spans":[{"start":11,"end":22,"label":"PERSON"}]}
+{"id":"person-hyphen","text":"Jean-Luc O'Neil sent the update.","spans":[{"start":0,"end":15,"label":"PERSON"}]}
+{"id":"person-title","text":"Dr. Maria Gonzalez-Ruiz arrives Friday.","spans":[{"start":4,"end":23,"label":"PERSON"},{"start":32,"end":38,"label":"DATE"}]}
+{"id":"person-two","text":"Alice Smith emailed Bob Jones.","spans":[{"start":0,"end":11,"label":"PERSON"},{"start":20,"end":29,"label":"PERSON"}]}
+{"id":"person-unicode","text":"Francois Dupont uses the staging proxy.","spans":[{"start":0,"end":15,"label":"PERSON"}]}
+{"id":"email-basic","text":"Reach Alice at alice.smith@example.com today.","spans":[{"start":15,"end":38,"label":"EMAIL"}]}
+{"id":"email-plus","text":"Use qa+alerts@sub.example.co.uk for alerts.","spans":[{"start":4,"end":31,"label":"EMAIL"}]}
+{"id":"email-code","text":"send(to=\"bob.jones@example.org\")","spans":[{"start":9,"end":30,"label":"EMAIL"}]}
+{"id":"email-work","text":"The work alias is privacy-filter@openai.example.","spans":[{"start":18,"end":47,"label":"EMAIL"}]}
+{"id":"phone-us","text":"Call 555-867-5309 before noon.","spans":[{"start":5,"end":17,"label":"PHONE"}]}
+{"id":"phone-intl","text":"Her number is +1 (415) 555-0134.","spans":[{"start":14,"end":31,"label":"PHONE"}]}
+{"id":"phone-extension","text":"Dial (650) 555-0199 ext. 42.","spans":[{"start":5,"end":27,"label":"PHONE"}]}
+{"id":"phone-dots","text":"Support can call 212.555.0100.","spans":[{"start":17,"end":29,"label":"PHONE"}]}
+{"id":"address-basic","text":"Ship to 123 Main St., Apt #4.","spans":[{"start":8,"end":28,"label":"ADDRESS"}]}
+{"id":"address-zip","text":"Office: 500 Market Street, San Francisco CA 94105.","spans":[{"start":8,"end":49,"label":"ADDRESS"}]}
+{"id":"address-suite","text":"Meet at 9 Elm Road Suite 3B-1.","spans":[{"start":8,"end":29,"label":"ADDRESS"}]}
+{"id":"address-city","text":"The return address is 77 Pine Ave, Seattle WA.","spans":[{"start":22,"end":45,"label":"ADDRESS"}]}
+{"id":"date-basic","text":"The meeting moved to Jan 3, 2026.","spans":[{"start":21,"end":32,"label":"DATE"}]}
+{"id":"date-iso","text":"Deploy freeze starts 2026-08-16.","spans":[{"start":21,"end":31,"label":"DATE"}]}
+{"id":"date-slash","text":"DOB: 04/15/1988.","spans":[{"start":5,"end":15,"label":"DATE"}]}
+{"id":"date-weekday","text":"Review the file next Friday.","spans":[{"start":16,"end":27,"label":"DATE"}]}
+{"id":"url-profile","text":"Visit https://intranet.example.com/profile/alice-smith.","spans":[{"start":6,"end":54,"label":"URL"}]}
+{"id":"url-http","text":"The callback is http://localhost:8080/oauth/callback.","spans":[{"start":16,"end":52,"label":"URL"}]}
+{"id":"url-path","text":"Open https://docs.example.org/a/b?ticket=123.","spans":[{"start":5,"end":44,"label":"URL"}]}
+{"id":"account-bank","text":"Account number 000123456789 received the transfer.","spans":[{"start":15,"end":27,"label":"ACCOUNT_NUMBER"}]}
+{"id":"account-iban","text":"IBAN GB82WEST12345698765432 belongs to the test account.","spans":[{"start":5,"end":27,"label":"ACCOUNT_NUMBER"}]}
+{"id":"account-card","text":"Card 4111 1111 1111 1111 was used.","spans":[{"start":5,"end":24,"label":"ACCOUNT_NUMBER"}]}
+{"id":"account-routing","text":"Routing/account pair 021000021 / 987654321 was pasted.","spans":[{"start":21,"end":30,"label":"ACCOUNT_NUMBER"},{"start":33,"end":42,"label":"ACCOUNT_NUMBER"}]}
+{"id":"secret-api","text":"Set API_KEY=sk-test-1234567890abcdef.","spans":[{"start":12,"end":36,"label":"SECRET"}]}
+{"id":"secret-token","text":"Authorization: Bearer abc.def.ghi","spans":[{"start":22,"end":33,"label":"SECRET"}]}
+{"id":"secret-password","text":"The temporary password is CorrectHorse123!","spans":[{"start":26,"end":42,"label":"SECRET"}]}
+{"id":"secret-uuid","text":"Reset token 550e8400-e29b-41d4-a716-446655440000.","spans":[{"start":12,"end":48,"label":"SECRET"}]}
+{"id":"multi-person-email","text":"Alice Smith can be reached at alice@example.net.","spans":[{"start":0,"end":11,"label":"PERSON"},{"start":30,"end":47,"label":"EMAIL"}]}
+{"id":"multi-phone-address","text":"Call 212-555-0100 from 42 Wallaby Way.","spans":[{"start":5,"end":17,"label":"PHONE"},{"start":23,"end":37,"label":"ADDRESS"}]}
+{"id":"multi-url-secret","text":"Post the token abc.def.ghi to https://api.example.com/login.","spans":[{"start":15,"end":26,"label":"SECRET"},{"start":30,"end":59,"label":"URL"}]}
+{"id":"multi-date-account","text":"On March 9, 2025, account 123456789 settled.","spans":[{"start":3,"end":16,"label":"DATE"},{"start":26,"end":35,"label":"ACCOUNT_NUMBER"}]}
+{"id":"negative-report","text":"The quarterly report shows no anomalies.","spans":[]}
+{"id":"negative-code","text":"def add(a, b): return a + b","spans":[]}
+{"id":"negative-product","text":"The proxy masked the request successfully.","spans":[]}
+{"id":"negative-latency","text":"Latency percentiles stayed flat during the canary.","spans":[]}

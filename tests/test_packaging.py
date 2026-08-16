@@ -28,11 +28,15 @@ def test_console_scripts_present():
     scripts = _pyproject()["project"]["scripts"]
     assert set(scripts) == {
         "anon-proxy",
+        "anon-proxy-bench",
         "anon-proxy-capture-report",
+        "anon-proxy-eval",
         "anon-proxy-menubar",
         "anon-proxy-store",
     }
     assert scripts["anon-proxy"] == "anon_proxy.cli:main"
+    assert scripts["anon-proxy-bench"] == "anon_proxy.bench:main"
+    assert scripts["anon-proxy-eval"] == "anon_proxy.eval:main"
 
 
 def test_torch_is_not_a_base_dependency():

@@ -238,7 +238,7 @@ so it is largest exactly where torch hurts most: CPU-only boxes.
 Reproduce the benchmark yourself:
 
 ```bash
-ANON_PROXY_LIVE_TESTS=1 uv run --extra onnx python scripts/bench_masking.py
+uv run --extra torch --extra onnx anon-proxy-bench synthetic --backend torch --backend onnx
 ```
 
 ### Config file

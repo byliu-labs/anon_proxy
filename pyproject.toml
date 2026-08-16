@@ -78,7 +78,9 @@ Issues = "https://github.com/byliu-labs/anon_proxy/issues"
 
 [project.scripts]
 anon-proxy = "anon_proxy.cli:main"
+anon-proxy-bench = "anon_proxy.bench:main"
 anon-proxy-capture-report = "anon_proxy.capture_report:main"
+anon-proxy-eval = "anon_proxy.eval:main"
 anon-proxy-menubar = "anon_proxy.menubar.app:main"
 anon-proxy-store = "anon_proxy.store_cli:main"
 
@@ -95,6 +97,7 @@ artifacts = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
     "ruff==0.15.20",
 ]
 
