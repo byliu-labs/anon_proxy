@@ -58,3 +58,7 @@ class MaskerRegistry:
             masker = self._make_masker(store)
             self._maskers[cid] = masker
             return masker
+
+    def store_size(self) -> int:
+        with self._lock:
+            return sum(len(masker.store) for masker in self._maskers.values())

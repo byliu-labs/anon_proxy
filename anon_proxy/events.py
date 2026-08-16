@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from typing import TextIO
 
 _MAGENTA = "\033[95m"
 _RESET = "\033[0m"
+SCHEMA_VERSION = 1
 
 
 class EventSink:
@@ -16,7 +18,13 @@ class EventSink:
         self._stream = stream
 
     def metrics(
-        self, *, provider: str, e2e: float, upstream: float, usage: dict | None = None
+        self,
+        *,
+        provider: str,
+        e2e: float,
+        upstream: float,
+        usage: dict | None = None,
+        request_id: str | None = None,
     ) -> None:
         proxy = max(e2e - upstream, 0.0)
         proxy_pct = proxy / e2e * 100.0 if e2e > 0 else 0.0
@@ -29,29 +37,44 @@ class EventSink:
         }
         if usage is not None:
             fields["usage"] = usage
+        if request_id is not None:
+            fields["request_id"] = request_id
         self._emit("metrics", _format_metrics(fields), fields)
 
     def metrics_summary(self, snapshot: dict) -> None:
         human = f"[metrics-summary] {json.dumps(snapshot, sort_keys=True)}"
         self._emit("metrics_summary", human, snapshot)
 
-    def canary_hit(self, *, label: str, text: str, action: str) -> None:
+    def canary_hit(
+        self, *, label: str, text: str, action: str, request_id: str | None = None
+    ) -> None:
         suffix = " - masking now" if action == "fix" else ""
         human = f"warning: canary: {label} {text!r} survived masking{suffix}"
         fields = {"label": label, "len": len(text), "action": action}
+        if request_id is not None:
+            fields["request_id"] = request_id
         self._emit("canary_hit", human, fields)
 
-    def unknown_token(self, token: str) -> None:
+    def unknown_token(self, token: str, *, request_id: str | None = None) -> None:
         human = (
             f"warning: unmask: unknown placeholder {token} left in response "
             f"(model may have invented it)"
         )
-        self._emit("unmask_unknown_token", human, {"token": token})
+        fields = {"token": token}
+        if request_id is not None:
+            fields["request_id"] = request_id
+        self._emit("unmask_unknown_token", human, fields)
 
     def _emit(self, event: str, human: str, fields: dict) -> None:
         stream = self._stream or sys.stderr
         if self._log_json:
-            print(json.dumps({"event": event, **fields}, sort_keys=True), file=stream)
+            payload = {
+                "schema_version": SCHEMA_VERSION,
+                "ts": time.time(),
+                "event": event,
+                **fields,
+            }
+            print(json.dumps(payload, sort_keys=True), file=stream)
         else:
             print(human, file=stream)
         stream.flush()

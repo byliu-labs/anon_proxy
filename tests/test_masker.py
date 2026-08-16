@@ -396,7 +396,9 @@ class TestPostMaskCanary:
         masker.mask("contact bob@example.com")
 
         event = json.loads(stream.getvalue())
-        assert event == {
+        assert event | {"ts": 0} == {
+            "schema_version": 1,
+            "ts": 0,
             "event": "canary_hit",
             "label": "EMAIL",
             "len": 15,

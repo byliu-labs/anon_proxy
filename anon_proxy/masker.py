@@ -19,10 +19,14 @@ _TELEMETRY: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "anon_proxy_masker_telemetry",
     default=None,
 )
+_TELEMETRY_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "anon_proxy_masker_telemetry_context",
+    default={},
+)
 
 
 @contextlib.contextmanager
-def telemetry_scope():
+def telemetry_scope(*, provider: str | None = None, request_id: str | None = None):
     """Collect per-call masker telemetry into a fresh list for the current task.
 
     Each entry: {"op": "mask"|"unmask"|"unmask_json", "chars": int, "ms": float,
@@ -33,9 +37,16 @@ def telemetry_scope():
     """
     record: list = []
     token = _TELEMETRY.set(record)
+    context = {}
+    if provider is not None:
+        context["provider"] = provider
+    if request_id is not None:
+        context["request_id"] = request_id
+    context_token = _TELEMETRY_CONTEXT.set(context)
     try:
         yield record
     finally:
+        _TELEMETRY_CONTEXT.reset(context_token)
         _TELEMETRY.reset(token)
 
 
@@ -126,6 +137,14 @@ class Masker:
     def store(self) -> PIIStore:
         return self._store
 
+    @property
+    def stats(self) -> MaskerStats | None:
+        return self._stats
+
+    def attach_stats(self, stats: MaskerStats) -> None:
+        if self._stats is None:
+            self._stats = stats
+
     def mask(self, text: str) -> str:
         record = _TELEMETRY.get()
         observed = record is not None or self._stats is not None
@@ -186,11 +205,13 @@ class Masker:
 
         canary_hits = self._canary_hits(masked)
         if canary_hits:
+            request_id = _TELEMETRY_CONTEXT.get().get("request_id")
             for hit in canary_hits:
                 self._events.canary_hit(
                     label=hit.label,
                     text=hit.text,
                     action=self._canary,
+                    request_id=request_id,
                 )
             if self._canary == "fix":
                 masked = self._substitute(masked, canary_hits)
@@ -230,6 +251,11 @@ class Masker:
             "ms": elapsed_ms,
             "cache_hit": cache_hit,
         }
+        context = _TELEMETRY_CONTEXT.get()
+        if "request_id" in context:
+            fields["request_id"] = context["request_id"]
+        if "provider" in context:
+            fields["provider"] = context["provider"]
         if skipped:
             fields["skipped"] = True
         if entities is not None:
@@ -241,6 +267,7 @@ class Masker:
                 elapsed_ms=elapsed_ms,
                 cache_hit=cache_hit,
                 entities=entities or [],
+                provider=context.get("provider"),
             )
         return result
 
@@ -380,8 +407,9 @@ class Masker:
             result = pattern.sub(repl, text)
 
         unknown = self._find_unknown_tokens(result)
+        request_id = _TELEMETRY_CONTEXT.get().get("request_id")
         for token in unknown:
-            self._events.unknown_token(token)
+            self._events.unknown_token(token, request_id=request_id)
         self._last_unknown_count = len(unknown)
         if self._stats is not None:
             self._stats.record_unknown_tokens(len(unknown))

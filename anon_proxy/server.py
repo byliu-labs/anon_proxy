@@ -20,9 +20,11 @@ import json
 import os
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urljoin
 
 import httpx
@@ -37,7 +39,7 @@ from anon_proxy.capture import Capturer
 from anon_proxy.client_id import classify_client
 from anon_proxy.config import Config, load_config
 from anon_proxy.default_patterns import DEFAULT_PATTERNS
-from anon_proxy.events import EventSink
+from anon_proxy.events import SCHEMA_VERSION, EventSink
 from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker, telemetry_scope
 from anon_proxy.metrics import ProxyMetrics
@@ -226,6 +228,7 @@ def _log_metrics(
     upstream: float,
     usage: dict | None = None,
     event_sink: EventSink | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Print per-turn latency breakdown to stderr."""
     (event_sink or EventSink()).metrics(
@@ -233,7 +236,44 @@ def _log_metrics(
         e2e=e2e,
         upstream=upstream,
         usage=usage,
+        request_id=request_id,
     )
+
+
+async def _metrics_file_loop(
+    path: str,
+    proxy_metrics: ProxyMetrics,
+    detection_stats: MaskerStats,
+    interval: float,
+) -> None:
+    if interval <= 0:
+        raise ValueError("metrics_file_interval must be > 0")
+    while True:
+        await asyncio.sleep(interval)
+        await _write_metrics_rollup(path, proxy_metrics, detection_stats)
+
+
+async def _write_metrics_rollup(
+    path: str,
+    proxy_metrics: ProxyMetrics,
+    detection_stats: MaskerStats,
+) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "ts": time.time(),
+        "event": "metrics_rollup",
+        "proxy": proxy_metrics.snapshot(),
+        "detection": detection_stats.snapshot(),
+    }
+    await asyncio.to_thread(_append_json_line, path, payload)
+
+
+def _append_json_line(path: str, payload: dict) -> None:
+    output = Path(path)
+    if output.parent:
+        output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 async def _timed_aiter(
@@ -309,7 +349,10 @@ def build_app(
     listen_addr: str | None = None,
     http_client: httpx.AsyncClient | None = None,
     metrics_summary: MaskerStats | None = None,
+    detection_stats: MaskerStats | None = None,
     event_sink: EventSink | None = None,
+    metrics_file: str | None = None,
+    metrics_file_interval: float = 60.0,
 ) -> Starlette:
     """Build the Starlette application.
 
@@ -329,11 +372,20 @@ def build_app(
         listen_addr: "host:port" label, surfaced on /_status.
         http_client: Injected AsyncClient for tests; a fresh one is made if None.
         metrics_summary: Optional process-wide mask metrics emitted on shutdown.
+        detection_stats: Optional process-wide live mask metrics accumulator.
         event_sink: Human/JSON operational event formatter.
+        metrics_file: Optional append-only JSONL rollup path.
+        metrics_file_interval: Seconds between periodic rollup writes.
     """
     event_sink = event_sink or EventSink()
+    detection_stats = detection_stats or metrics_summary
+    if detection_stats is None and masker is not None:
+        detection_stats = getattr(masker, "stats", None)
+    detection_stats = detection_stats or MaskerStats()
     if registry is None:
-        masker = masker or Masker(stats=metrics_summary, event_sink=event_sink)
+        masker = masker or Masker(stats=detection_stats, event_sink=event_sink)
+        if hasattr(masker, "attach_stats"):
+            masker.attach_stats(detection_stats)
     if isinstance(metrics, ProxyMetrics):
         proxy_metrics = metrics
         latency_metrics = False
@@ -356,6 +408,7 @@ def build_app(
         client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(600.0, connect=10.0)
         )
+        rollup_task = None
         try:
             app.state.client = client
             app.state.masker = masker
@@ -370,25 +423,50 @@ def build_app(
             app.state.backend = backend_for_status()
             app.state.listen_addr = listen_addr
             app.state.event_sink = event_sink
+            app.state.detection_stats = detection_stats
+            if metrics_file is not None:
+                rollup_task = asyncio.create_task(
+                    _metrics_file_loop(
+                        metrics_file,
+                        proxy_metrics,
+                        detection_stats,
+                        metrics_file_interval,
+                    )
+                )
             yield
         finally:
+            if rollup_task is not None:
+                rollup_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await rollup_task
+            if metrics_file is not None:
+                await _write_metrics_rollup(
+                    metrics_file,
+                    proxy_metrics,
+                    detection_stats,
+                )
             if capture is not None:
                 capture.close()
             if metrics_summary is not None:
-                event_sink.metrics_summary(metrics_summary.snapshot())
+                event_sink.metrics_summary(detection_stats.snapshot())
             if owns_client:
                 await client.aclose()
 
     async def status_endpoint(request: Request) -> Response:
         st = request.app.state
         snap = st.metrics.snapshot()
+        store_size = len(st.masker.store) if st.masker is not None else 0
+        if st.registry is not None:
+            store_size = st.registry.store_size()
         snap.update(
             {
                 "status": "running",
+                "schema_version": SCHEMA_VERSION,
                 "listen_addr": st.listen_addr,
                 "providers": sorted(st.upstreams.keys()),
                 "backend": st.backend,
-                "store": len(st.masker.store),
+                "store": store_size,
+                "detection": st.detection_stats.snapshot(),
             }
         )
         return Response(
@@ -467,6 +545,7 @@ async def _handle_proxy(
     capture: Capturer | None = request.app.state.capture
     t_start = time.perf_counter()
     upstream_acc: list[float] = [0.0]
+    request_id = uuid.uuid4().hex[:12]
 
     # Extract API path from request (remove provider prefix)
     path_parts = request.url.path.strip("/").split("/", 1)
@@ -527,14 +606,15 @@ async def _handle_proxy(
     mask_request_ms: float | None = None
     mask_calls: list = []
     try:
-        if capture is not None:
-            with telemetry_scope() as calls:
-                t_mask = time.perf_counter()
-                masked = await asyncio.to_thread(adapter.mask_request, body, masker)
-                mask_request_ms = (time.perf_counter() - t_mask) * 1000
-                mask_calls = list(calls)
-        else:
+        with telemetry_scope(
+            provider=upstream_config.name,
+            request_id=request_id,
+        ) as calls:
+            t_mask = time.perf_counter()
             masked = await asyncio.to_thread(adapter.mask_request, body, masker)
+            mask_request_ms = (time.perf_counter() - t_mask) * 1000
+            if capture is not None:
+                mask_calls = list(calls)
     except Exception:
         _safe_metric(proxy_metrics.record_masking_error)
         print("error: masking failed; refusing to forward unmasked", file=sys.stderr)
@@ -605,13 +685,11 @@ async def _handle_proxy(
                 [] if capture is not None else None
             )
             stream_calls: list = []
-            scope = (
-                telemetry_scope()
-                if capture is not None
-                else contextlib.nullcontext(None)
-            )
             try:
-                with scope as calls:
+                with telemetry_scope(
+                    provider=upstream_config.name,
+                    request_id=request_id,
+                ) as calls:
                     async for out in adapter.transform_stream(
                         _timed_aiter(
                             upstream_resp.aiter_bytes(), upstream_acc, upstream_byte_acc
@@ -624,7 +702,7 @@ async def _handle_proxy(
                             downstream_byte_acc.append(out)
                         approx_chars += len(out.decode("utf-8", "ignore"))
                         yield out
-                    if calls is not None:
+                    if capture is not None:
                         stream_calls = list(calls)
                 await _maybe_save_store(masker, store_save_path, store_before)
             finally:
@@ -658,6 +736,7 @@ async def _handle_proxy(
                         upstream_acc[0],
                         usage=usage,
                         event_sink=event_sink,
+                        request_id=request_id,
                     )
                 if capture is not None:
                     e2e_s = time.perf_counter() - t_start
@@ -667,6 +746,7 @@ async def _handle_proxy(
                     await capture.write(
                         {
                             "ts": datetime.now(timezone.utc).isoformat(),
+                            "request_id": request_id,
                             "provider": upstream_config.name,
                             "path": api_path,
                             "streaming": True,
@@ -717,14 +797,15 @@ async def _handle_proxy(
         if resp_json is not None and upstream_resp.status_code < 400:
             unmask_response_ms: float | None = None
             unmask_calls: list = []
-            if capture is not None:
-                with telemetry_scope() as calls:
-                    t_unmask = time.perf_counter()
-                    unmasked = adapter.unmask_response(resp_json, masker)
-                    unmask_response_ms = (time.perf_counter() - t_unmask) * 1000
-                    unmask_calls = list(calls)
-            else:
+            with telemetry_scope(
+                provider=upstream_config.name,
+                request_id=request_id,
+            ) as calls:
+                t_unmask = time.perf_counter()
                 unmasked = adapter.unmask_response(resp_json, masker)
+                unmask_response_ms = (time.perf_counter() - t_unmask) * 1000
+                if capture is not None:
+                    unmask_calls = list(calls)
             if debug:
                 _log_response(resp_json, unmasked)
             n_out = extract_output_tokens(upstream_config.adapter, resp_json)
@@ -737,12 +818,14 @@ async def _handle_proxy(
                     upstream_acc[0],
                     usage=_extract_usage(resp_json),
                     event_sink=event_sink,
+                    request_id=request_id,
                 )
             if capture is not None:
                 e2e_s = time.perf_counter() - t_start
                 await capture.write(
                     {
                         "ts": datetime.now(timezone.utc).isoformat(),
+                        "request_id": request_id,
                         "provider": upstream_config.name,
                         "path": api_path,
                         "streaming": False,
@@ -771,6 +854,7 @@ async def _handle_proxy(
             time.perf_counter() - t_start,
             upstream_acc[0],
             event_sink=event_sink,
+            request_id=request_id,
         )
     return Response(
         content=upstream_resp.content,
@@ -952,6 +1036,19 @@ def _build_parser():
         default=os.environ.get("ANON_PROXY_METRICS_SUMMARY", "").lower()
         in ("1", "true", "yes"),
         help="Log PII-free mask latency/cache/canary aggregates on shutdown.",
+    )
+    parser.add_argument(
+        "--metrics-file",
+        default=os.environ.get("ANON_PROXY_METRICS_FILE"),
+        metavar="PATH",
+        help="Append PII-free aggregate metrics rollups to PATH as JSONL.",
+    )
+    parser.add_argument(
+        "--metrics-file-interval",
+        type=float,
+        default=float(os.environ.get("ANON_PROXY_METRICS_FILE_INTERVAL", "60")),
+        metavar="SECONDS",
+        help="Seconds between periodic --metrics-file rollups.",
     )
     parser.add_argument(
         "--log-json",
@@ -1147,7 +1244,8 @@ def main(argv: list[str] | None = None) -> None:
         store = None
 
     registry = None
-    metrics_summary = MaskerStats() if args.metrics_summary else None
+    detection_stats = MaskerStats()
+    metrics_summary = detection_stats if args.metrics_summary else None
     event_sink = EventSink(log_json=args.log_json)
     masker = (
         Masker(
@@ -1157,7 +1255,7 @@ def main(argv: list[str] | None = None) -> None:
             ignore_labels=cfg.ignore_labels,
             canary=canary,
             min_known_entity_len=min_known_entity_len,
-            stats=metrics_summary,
+            stats=detection_stats,
             event_sink=event_sink,
         )
         if (store is not None or pf is not None or extra_detectors or cfg.ignore_labels)
@@ -1174,7 +1272,7 @@ def main(argv: list[str] | None = None) -> None:
                 ignore_labels=cfg.ignore_labels,
                 canary=canary,
                 min_known_entity_len=min_known_entity_len,
-                stats=metrics_summary,
+                stats=detection_stats,
                 event_sink=event_sink,
             )
 
@@ -1210,7 +1308,10 @@ def main(argv: list[str] | None = None) -> None:
         backend=args.backend,
         listen_addr=f"{args.host}:{args.port}",
         metrics_summary=metrics_summary,
+        detection_stats=detection_stats,
         event_sink=event_sink,
+        metrics_file=args.metrics_file,
+        metrics_file_interval=args.metrics_file_interval,
     )
 
     all_providers = sorted({**BUILT_IN_UPSTREAMS, **extra_upstreams}.keys())
@@ -1221,6 +1322,7 @@ def main(argv: list[str] | None = None) -> None:
         f"  debug: {args.debug}\n"
         f"  metrics: {args.metrics}\n"
         f"  metrics_summary: {args.metrics_summary}\n"
+        f"  metrics_file: {args.metrics_file or '(off)'}\n"
         f"  log_json: {args.log_json}\n"
         f"  capture: {args.capture or '(off)'}\n"
         f"  store: {args.store or '(none)'}\n"

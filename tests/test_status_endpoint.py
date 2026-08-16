@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from starlette.testclient import TestClient
 
 from anon_proxy.metrics import ProxyMetrics
+from anon_proxy.registry import MaskerRegistry
 from anon_proxy.server import build_app
 
 
@@ -47,6 +48,21 @@ def test_status_route_not_treated_as_provider():
 
     assert resp.status_code == 200
     assert json.loads(resp.text)["status"] == "running"
+
+
+def test_multi_user_status_reports_without_single_user_masker():
+    app = build_app(
+        registry=MaskerRegistry(lambda store: _status_masker(), store_dir=None),
+        metrics=ProxyMetrics(started_at=0.0),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/_status")
+
+    body = json.loads(resp.text)
+    assert resp.status_code == 200
+    assert body["status"] == "running"
+    assert body["store"] == 0
 
 
 def test_status_reports_resolved_backend_not_auto(monkeypatch):
