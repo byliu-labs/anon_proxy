@@ -15,7 +15,6 @@ Client auth headers are forwarded verbatim and never stored.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import sys
@@ -249,8 +248,24 @@ async def _metrics_file_loop(
     if interval <= 0:
         raise ValueError("metrics_file_interval must be > 0")
     while True:
-        await asyncio.sleep(interval)
+        try:
+            await asyncio.sleep(interval)
+            await _write_metrics_rollup(path, proxy_metrics, detection_stats)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"error: metrics file rollup failed: {e}", file=sys.stderr)
+
+
+async def _safe_write_metrics_rollup(
+    path: str,
+    proxy_metrics: ProxyMetrics,
+    detection_stats: MaskerStats,
+) -> None:
+    try:
         await _write_metrics_rollup(path, proxy_metrics, detection_stats)
+    except Exception as e:
+        print(f"error: metrics file rollup failed: {e}", file=sys.stderr)
 
 
 async def _write_metrics_rollup(
@@ -377,6 +392,8 @@ def build_app(
         metrics_file: Optional append-only JSONL rollup path.
         metrics_file_interval: Seconds between periodic rollup writes.
     """
+    if metrics_file is not None and metrics_file_interval <= 0:
+        raise ValueError("metrics_file_interval must be > 0")
     event_sink = event_sink or EventSink()
     detection_stats = detection_stats or metrics_summary
     if detection_stats is None and masker is not None:
@@ -437,10 +454,14 @@ def build_app(
         finally:
             if rollup_task is not None:
                 rollup_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
+                try:
                     await rollup_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    print(f"error: metrics file rollup failed: {e}", file=sys.stderr)
             if metrics_file is not None:
-                await _write_metrics_rollup(
+                await _safe_write_metrics_rollup(
                     metrics_file,
                     proxy_metrics,
                     detection_stats,
