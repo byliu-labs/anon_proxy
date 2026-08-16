@@ -267,6 +267,25 @@ class TestUnmaskResponseShape:
         assert out["output_text"] == "Hi Alice"
         assert out["output"][0]["content"][0]["text"] == "Hi Alice"
 
+    def test_responses_api_function_call_arguments_are_json_escaped(
+        self, masker, store
+    ):
+        store.get_or_create("SECRET", 'Bob"X\\Y')
+        body = {
+            "id": "resp_1",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "send",
+                    "arguments": json.dumps({"name": "<SECRET_1>"}),
+                }
+            ],
+        }
+
+        out = oai.unmask_response(body, masker)
+
+        assert json.loads(out["output"][0]["arguments"]) == {"name": 'Bob"X\\Y'}
+
 
 class TestUnmaskResponseContent:
     def test_string_content_unmasked(self, masker, store):

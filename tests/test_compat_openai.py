@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from anon_proxy.regex_detector import RegexDetector
 from tests.support.mock_upstream import (
     assert_masked_roundtrip,
@@ -12,6 +14,10 @@ from tests.support.mock_upstream import (
 
 def _masker(make_masker):
     return make_masker(extra_detectors=[RegexDetector({"PERSON": r"\bAlice\b"})])
+
+
+def _secret_masker(make_masker):
+    return make_masker(extra_detectors=[RegexDetector({"SECRET": r'Bob"X\\Y'})])
 
 
 def test_openai_chat_non_streaming_roundtrip_and_url(make_masker):
@@ -120,6 +126,34 @@ def test_openai_responses_non_streaming_roundtrip_and_system_injection(make_mask
         raw="Alice",
         token="<PERSON_1>",
     )
+
+
+def test_openai_responses_function_call_arguments_roundtrip_json(make_masker):
+    client, upstream = proxy_client(
+        _secret_masker(make_masker),
+        routes=[
+            record_route(
+                "POST",
+                "/v1/responses",
+                json_body=fixture_json(
+                    "openai", "responses_function_call.response.json"
+                ),
+            )
+        ],
+    )
+
+    with client:
+        response = client.post(
+            "/openai/v1/responses",
+            json=fixture_json("openai", "responses_function_call.request.json"),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert json.loads(body["output"][0]["arguments"]) == {"name": 'Bob"X\\Y'}
+    assert b'Bob"X\\Y' not in upstream.requests[0].body
+    assert b"<SECRET_1>" in upstream.requests[0].body
+    assert "<SECRET_1>" not in response.text
 
 
 def test_openai_responses_streaming_roundtrip(make_masker):

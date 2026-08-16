@@ -93,6 +93,39 @@ def _reconstruct_openai_content(out: bytes) -> str:
     return decoded
 
 
+def _responses_deltas(out: bytes, event_type: str) -> list[str]:
+    values = []
+    for line in out.decode().split("\n"):
+        if not line.startswith("data:") or "[DONE]" in line:
+            continue
+        try:
+            d = json.loads(line[len("data:") :].strip())
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") == event_type and isinstance(d.get("delta"), str):
+            values.append(d["delta"])
+    return values
+
+
+def _responses_arguments(out: bytes) -> list[str]:
+    values = []
+    for line in out.decode().split("\n"):
+        if not line.startswith("data:") or "[DONE]" in line:
+            continue
+        try:
+            d = json.loads(line[len("data:") :].strip())
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") in (
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        ):
+            value = d.get("delta") if "delta" in d else d.get("arguments")
+            if isinstance(value, str):
+                values.append(value)
+    return values
+
+
 def _make_masker_with_tokens(make_filter, store, *pairs):
     from anon_proxy.masker import Masker
 
@@ -791,6 +824,91 @@ class TestOpenAIToolCallFlush:
         assert b"Alice" in out
         assert b"<PERSON_1>" not in out
         assert b"[DONE]" in out
+
+
+@pytest.mark.asyncio
+class TestOpenAIResponsesStreaming:
+    async def test_output_text_delta_split_across_two_deltas(self, make_filter, store):
+        m = _make_masker_with_tokens(make_filter, store, ("PERSON", "Alice"))
+        chunks = [
+            _oai_event({"type": "response.output_text.delta", "delta": "Hi <PER"}),
+            _oai_event({"type": "response.output_text.delta", "delta": "SON_1>"}),
+            _oai_event("[DONE]"),
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+
+        assert (
+            "".join(_responses_deltas(out, "response.output_text.delta")) == "Hi Alice"
+        )
+        assert b"<PERSON_1>" not in out
+
+    async def test_function_call_arguments_delta_split_to_complete_json(
+        self, make_filter, store
+    ):
+        m = _make_masker_with_tokens(make_filter, store, ("SECRET", 'Bob"X\\Y'))
+        chunks = [
+            _oai_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": '{"name":"<SEC',
+                }
+            ),
+            _oai_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": 'RET_1>"}',
+                }
+            ),
+            _oai_event("[DONE]"),
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+
+        assert json.loads("".join(_responses_arguments(out))) == {"name": 'Bob"X\\Y'}
+        assert b"<SECRET_1>" not in out
+
+    async def test_function_call_arguments_incomplete_flushes_on_done(
+        self, make_filter, store
+    ):
+        m = _make_masker_with_tokens(make_filter, store, ("SECRET", 'Bob"X\\Y'))
+        chunks = [
+            _oai_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": '{"name":"<SECRET_1>',
+                }
+            ),
+            _oai_event("[DONE]"),
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+
+        assert "".join(_responses_arguments(out)) == '{"name":"Bob\\"X\\\\Y'
+        assert b"<SECRET_1>" not in out
+        assert b"[DONE]" in out
+
+    async def test_function_call_arguments_done_is_json_escaped(
+        self, make_filter, store
+    ):
+        m = _make_masker_with_tokens(make_filter, store, ("SECRET", 'Bob"X\\Y'))
+        chunks = [
+            _oai_event(
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "fc_1",
+                    "arguments": json.dumps({"name": "<SECRET_1>"}),
+                }
+            )
+        ]
+
+        out = await _collect(oai.transform_stream(_aiter(chunks), m))
+
+        assert json.loads("".join(_responses_arguments(out))) == {"name": 'Bob"X\\Y'}
+        assert b"<SECRET_1>" not in out
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,12 @@
+{
+  "id": "resp_compat_fn_1",
+  "object": "response",
+  "output": [
+    {
+      "id": "fc_1",
+      "type": "function_call",
+      "name": "send_secret",
+      "arguments": "{\"name\":\"<SECRET_1>\"}"
+    }
+  ]
+}

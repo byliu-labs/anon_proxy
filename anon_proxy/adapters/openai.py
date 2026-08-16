@@ -97,7 +97,9 @@ def unmask_response(body: dict, masker: Masker) -> dict:
         result["output_text"] = masker.unmask(output_text)
     output = body.get("output")
     if isinstance(output, list):
-        result["output"] = _walk_strings(output, masker.unmask)
+        result["output"] = [
+            _unmask_responses_output_item(item, masker) for item in output
+        ]
     return result
 
 
@@ -157,6 +159,18 @@ def _unmask_tool_call(tool_call: dict, masker: Masker) -> dict:
                 **function,
                 "arguments": _walk_strings(args, masker.unmask),
             }
+    return result
+
+
+def _unmask_responses_output_item(item, masker: Masker):
+    if not isinstance(item, dict):
+        return _walk_strings(item, masker.unmask)
+    result = {}
+    for key, value in item.items():
+        if key == "arguments" and isinstance(value, str):
+            result[key] = masker.unmask_json(value)
+        else:
+            result[key] = _walk_strings(value, masker.unmask)
     return result
 
 

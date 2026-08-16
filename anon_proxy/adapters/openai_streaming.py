@@ -341,6 +341,17 @@ def _transform_responses_event(
             yield event_type, json.dumps({**data, "delta": unmasked})
         return
 
+    if response_type == "response.function_call_arguments.done":
+        arguments = data.get("arguments")
+        if isinstance(arguments, str):
+            unmasked = masker.unmask_json(arguments)
+            if on_substitution and arguments != unmasked:
+                on_substitution(arguments, unmasked)
+            yield event_type, json.dumps({**data, "arguments": unmasked})
+        else:
+            yield event_type, json.dumps(data)
+        return
+
     yield event_type, json.dumps(_walk_strings(data, masker.unmask))
 
 
