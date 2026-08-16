@@ -1,0 +1,51 @@
+name: Detection eval
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: detection-eval
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Cache Hugging Face model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-privacy-filter-eval-v1
+          restore-keys: |
+            hf-privacy-filter-eval-
+
+      - name: Install dependencies (torch reference)
+        run: uv sync --extra torch --dev
+
+      - name: Run detection quality gate
+        run: >
+          uv run --extra torch anon-proxy-eval tests/data/pii_corpus.jsonl
+          --backend torch
+          --json
+          --fail-under-recall PERSON=0.50,EMAIL=0.50,PHONE=0.40,ADDRESS=0.30,ORGANIZATION=0.30,DATE=0.30
+          > detection-eval.json
+
+      - name: Upload detection report
+        uses: actions/upload-artifact@v4
+        with:
+          name: detection-eval
+          path: detection-eval.json

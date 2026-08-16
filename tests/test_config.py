@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 
 from anon_proxy.config import Config, load_config
+from anon_proxy.masker import Masker
+from anon_proxy.regex_detector import RegexDetector
 from anon_proxy.upstream import UpstreamConfig
+
+from .conftest import span
 
 
 def _write(tmp_path: Path, data: dict) -> Path:
@@ -176,3 +180,44 @@ class TestUpstreams:
     def test_top_level_must_be_object(self, tmp_path):
         with pytest.raises(ValueError, match="upstreams"):
             load_config(_write(tmp_path, {"upstreams": []}))
+
+
+def test_config_file_wires_detector_mask_and_unmask_round_trip(
+    tmp_path, make_filter, fake_pipeline, store
+):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            {
+                "patterns": {"PHONE": r"\d{3}-\d{4}"},
+                "merge_gap": {"PERSON": " "},
+                "ignore_labels": ["ORGANIZATION"],
+                "canary": "off",
+                "min_known_entity_len": 0,
+            },
+        )
+    )
+    text = "Alice Smith called 555-1212 from Acme."
+    intermediate = "Alice Smith called <PHONE_1> from Acme."
+    fake_pipeline.set(
+        intermediate,
+        [
+            span("PERSON", 0, 5, score=0.99),
+            span("PERSON", 6, 11, score=0.98),
+            span("ORGANIZATION", 34, 38, score=0.99),
+        ],
+    )
+    masker = Masker(
+        filter=make_filter(merge_gap_allowed=cfg.merge_gap),
+        store=store,
+        extra_detectors=[RegexDetector(cfg.patterns)],
+        ignore_labels=cfg.ignore_labels,
+        canary=cfg.canary,
+        min_known_entity_len=cfg.min_known_entity_len,
+        skip_patterns=[],
+    )
+
+    masked = masker.mask(text)
+
+    assert masked == "<PERSON_1> called <PHONE_1> from Acme."
+    assert masker.unmask(masked) == text

@@ -1,0 +1,19 @@
+{
+  "command": "synthetic",
+  "arms": [
+    {
+      "name": "torch",
+      "backend": "torch",
+      "summary": {
+        "warm_median_ms": 30000.0
+      }
+    },
+    {
+      "name": "onnx",
+      "backend": "onnx",
+      "summary": {
+        "warm_median_ms": 5000.0
+      }
+    }
+  ]
+}

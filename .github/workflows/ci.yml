@@ -45,5 +45,5 @@ jobs:
       - name: Install dependencies (torch-free base + onnx)
         run: uv sync --extra onnx --dev
 
-      - name: Run tests
-        run: uv run pytest -v
+      - name: Run tests with coverage gate
+        run: uv run pytest -v --cov=anon_proxy --cov-report=term-missing --cov-fail-under=70

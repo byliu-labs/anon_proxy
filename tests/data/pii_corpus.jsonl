@@ -1,0 +1,40 @@
+{"id":"person-basic","text":"My name is Alice Smith.","spans":[{"start":11,"end":22,"label":"PERSON"}]}
+{"id":"person-hyphen","text":"Jean-Luc O'Neil sent the update.","spans":[{"start":0,"end":15,"label":"PERSON"}]}
+{"id":"person-cjk","text":"账户持有人：王小明。","spans":[{"start":6,"end":9,"label":"PERSON"}]}
+{"id":"email-basic","text":"Reach Alice at alice.smith@example.com today.","spans":[{"start":15,"end":38,"label":"EMAIL"}]}
+{"id":"email-plus","text":"Use qa+alerts@sub.example.co.uk for alerts.","spans":[{"start":4,"end":31,"label":"EMAIL"}]}
+{"id":"email-code","text":"send(to=\"bob.jones@example.org\")","spans":[{"start":9,"end":30,"label":"EMAIL"}]}
+{"id":"phone-us","text":"Call 555-867-5309 before noon.","spans":[{"start":5,"end":17,"label":"PHONE"}]}
+{"id":"phone-intl","text":"Her number is +1 (415) 555-0134.","spans":[{"start":14,"end":31,"label":"PHONE"}]}
+{"id":"phone-cjk","text":"电话 +86 138 0013 8000。","spans":[{"start":3,"end":20,"label":"PHONE"}]}
+{"id":"address-basic","text":"Ship to 123 Main St., Apt #4.","spans":[{"start":8,"end":28,"label":"ADDRESS"}]}
+{"id":"address-zip","text":"Office: 500 Market Street, San Francisco CA 94105.","spans":[{"start":8,"end":49,"label":"ADDRESS"}]}
+{"id":"address-suite","text":"Meet at 9 Elm Road Suite 3B-1.","spans":[{"start":8,"end":29,"label":"ADDRESS"}]}
+{"id":"org-basic","text":"Acme Corp approved the invoice.","spans":[{"start":0,"end":9,"label":"ORGANIZATION"}]}
+{"id":"org-punct","text":"Globex, Inc. hired Stark & Wayne.","spans":[{"start":0,"end":12,"label":"ORGANIZATION"},{"start":19,"end":32,"label":"ORGANIZATION"}]}
+{"id":"org-email","text":"legal@acme.example belongs to Acme Corp & Sons.","spans":[{"start":0,"end":18,"label":"EMAIL"},{"start":30,"end":46,"label":"ORGANIZATION"}]}
+{"id":"date-basic","text":"The meeting moved to Jan 3, 2026.","spans":[{"start":21,"end":32,"label":"DATE"}]}
+{"id":"date-iso","text":"Deploy freeze starts 2026-08-16.","spans":[{"start":21,"end":31,"label":"DATE"}]}
+{"id":"date-slash","text":"DOB: 04/15/1988.","spans":[{"start":5,"end":15,"label":"DATE"}]}
+{"id":"secret-api","text":"Set API_KEY=sk-test-1234567890abcdef.","spans":[{"start":12,"end":36,"label":"SECRET"}]}
+{"id":"secret-token","text":"Authorization: Bearer abc.def.ghi","spans":[{"start":22,"end":33,"label":"SECRET"}]}
+{"id":"secret-password","text":"The temporary password is CorrectHorse123!","spans":[{"start":26,"end":42,"label":"SECRET"}]}
+{"id":"govt-ssn","text":"SSN 123-45-6789 is in the form.","spans":[{"start":4,"end":15,"label":"GOVT_ID"}]}
+{"id":"govt-passport","text":"Passport number X12345678 expires soon.","spans":[{"start":16,"end":25,"label":"GOVT_ID"}]}
+{"id":"govt-tax","text":"Tax ID 98-7654321 was redacted.","spans":[{"start":7,"end":17,"label":"GOVT_ID"}]}
+{"id":"multi-person-email","text":"Alice Smith emailed Bob Jones at bob@example.net.","spans":[{"start":0,"end":11,"label":"PERSON"},{"start":20,"end":29,"label":"PERSON"},{"start":33,"end":48,"label":"EMAIL"}]}
+{"id":"multi-phone-address","text":"Call 212-555-0100 from 42 Wallaby Way.","spans":[{"start":5,"end":17,"label":"PHONE"},{"start":23,"end":37,"label":"ADDRESS"}]}
+{"id":"multi-org-date","text":"Contoso signed with Initech on March 9, 2025.","spans":[{"start":0,"end":7,"label":"ORGANIZATION"},{"start":20,"end":27,"label":"ORGANIZATION"},{"start":31,"end":44,"label":"DATE"}]}
+{"id":"url-profile","text":"Visit https://intranet.example.com/profile/alice-smith.","spans":[{"start":6,"end":54,"label":"SECRET"}]}
+{"id":"ip-address","text":"Server 10.24.8.19 handled the request.","spans":[{"start":7,"end":17,"label":"SECRET"}]}
+{"id":"credit-card","text":"Card 4111 1111 1111 1111 was used.","spans":[{"start":5,"end":24,"label":"GOVT_ID"}]}
+{"id":"negative-report","text":"The quarterly report shows no anomalies.","spans":[]}
+{"id":"negative-code","text":"def add(a, b): return a + b","spans":[]}
+{"id":"negative-product","text":"The proxy masked the request successfully.","spans":[]}
+{"id":"chunk-straddle","text":"x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x Alice Smith lives at 9 Elm Road. y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y y","spans":[{"start":1444,"end":1455,"label":"PERSON"},{"start":1465,"end":1475,"label":"ADDRESS"}]}
+{"id":"adjacent-name-date","text":"Dr. Maria Gonzalez-Ruiz arrives Friday.","spans":[{"start":4,"end":23,"label":"PERSON"},{"start":32,"end":38,"label":"DATE"}]}
+{"id":"unicode-email","text":"François Dupont uses francois.dupont@example.fr.","spans":[{"start":0,"end":15,"label":"PERSON"},{"start":21,"end":47,"label":"EMAIL"}]}
+{"id":"apostrophe-org","text":"O'Reilly Media invoices jane@oreilly.example.","spans":[{"start":0,"end":14,"label":"ORGANIZATION"},{"start":24,"end":44,"label":"EMAIL"}]}
+{"id":"address-cjk","text":"地址：上海市浦东新区世纪大道100号。","spans":[{"start":3,"end":18,"label":"ADDRESS"}]}
+{"id":"phone-extension","text":"Dial (650) 555-0199 ext. 42.","spans":[{"start":5,"end":27,"label":"PHONE"}]}
+{"id":"secret-uuid","text":"Reset token 550e8400-e29b-41d4-a716-446655440000.","spans":[{"start":12,"end":48,"label":"SECRET"}]}
