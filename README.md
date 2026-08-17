@@ -369,6 +369,7 @@ uv sync --extra menubar
 
 # With the proxy already running:
 uv run anon-proxy-menubar
+uv run anon-proxy-menubar --start-proxy
 uv run anon-proxy-menubar --watch
 uv run anon-proxy-menubar --url http://127.0.0.1:8080/_status
 ```
@@ -381,6 +382,9 @@ The dropdown includes:
   launched by this menu-bar app.
 - `Start at login`: installs or removes the launchd agent
   `com.anon-proxy.menubar`.
+
+Use `--start-proxy` when you want the menu-bar app to launch and supervise the
+proxy immediately instead of attaching to an already-running proxy.
 
 Regenerate the committed dino frames after editing the pixel matrices:
 
