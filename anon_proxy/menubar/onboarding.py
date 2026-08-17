@@ -21,7 +21,7 @@ def default_profile() -> Path:
 
 
 def is_routing_installed(profile: Path) -> bool:
-    return profile.exists() and PATH_MARKER in profile.read_text()
+    return profile.exists() and PATH_MARKER in profile.read_text(encoding="utf-8")
 
 
 def install_routing(commands: list[str], profile: Path) -> None:
