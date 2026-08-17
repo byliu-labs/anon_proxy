@@ -22,6 +22,7 @@ IFS=:
 for d in $PATH; do
   [ "$d" = "$SHIM_DIR" ] && continue
   [ "$d/$CMD" = "$SHIM_DIR/$CMD" ] && continue
+  [ "$d/$CMD" -ef "$SHIM_DIR/$CMD" ] 2>/dev/null && continue
   if [ -x "$d/$CMD" ]; then REAL="$d/$CMD"; break; fi
 done
 IFS=$OLDIFS
