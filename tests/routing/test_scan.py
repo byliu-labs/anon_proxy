@@ -1,4 +1,4 @@
-from anon_proxy.routing.scan import ProcInfo, classify_instances
+from anon_proxy.routing.scan import ProcInfo, _has_env_marker, classify_instances
 
 
 def test_classifies_proxied_vs_raw_by_env():
@@ -21,3 +21,9 @@ def test_public_url_env_does_not_count_as_proxied():
 
 def test_empty_when_no_instances():
     assert classify_instances("codex", "OPENAI_BASE_URL", ps_lines=[]) == []
+
+
+def test_env_marker_detection():
+    lines = ["  1 /bin/sh ANON_PROXY_PS_PROBE=visible"]
+    assert _has_env_marker(lines, "ANON_PROXY_PS_PROBE=visible") is True
+    assert _has_env_marker(lines, "ANON_PROXY_PS_PROBE=missing") is False

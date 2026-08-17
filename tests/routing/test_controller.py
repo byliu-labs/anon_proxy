@@ -19,6 +19,13 @@ def test_enable_writes_fragment_and_persists(home):
     assert load_state().targets["claude"].enabled is True
 
 
+def test_enable_turns_global_routing_on(home):
+    c = RoutingController(RoutingState(port=51843, enabled=False))
+    c.set_enabled("claude", True)
+    assert (env_dir() / "claude.sh").read_text().count("ANTHROPIC_BASE_URL") == 1
+    assert load_state().enabled is True
+
+
 def test_disable_clears_fragment(home):
     c = RoutingController(RoutingState(port=51843, enabled=True))
     c.set_enabled("claude", True)
@@ -60,3 +67,4 @@ def test_add_target_installs_shim(home, monkeypatch):
     c.add_target("aider", "openai")
     assert (shim_dir() / "aider").exists()
     assert load_state().targets["aider"].provider == "openai"
+    assert load_state().enabled is True

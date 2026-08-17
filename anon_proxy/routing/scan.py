@@ -6,8 +6,10 @@ import os
 import shlex
 import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 
 _LOOPBACK_PREFIXES = ("=http://127.0.0.1", "=http://localhost")
+_ENV_MARKER = "ANON_PROXY_PS_PROBE=visible"
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,28 @@ def _ps_eww() -> list[str]:
     except (OSError, subprocess.SubprocessError):
         return []
     return res.stdout.splitlines()
+
+
+def _has_env_marker(lines: list[str], marker: str) -> bool:
+    return any(marker in line for line in lines)
+
+
+@lru_cache(maxsize=1)
+def env_visibility_available() -> bool:
+    env = dict(os.environ, ANON_PROXY_PS_PROBE="visible")
+    try:
+        proc = subprocess.Popen(["/bin/sh", "-c", "sleep 1"], env=env)
+    except OSError:
+        return False
+    try:
+        return _has_env_marker(_ps_eww(), _ENV_MARKER)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.SubprocessError:
+            proc.kill()
+            proc.wait()
 
 
 def scan_target(command: str, provider: str) -> list[ProcInfo]:

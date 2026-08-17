@@ -40,6 +40,8 @@ class RoutingController:
 
     def set_enabled(self, command: str, enabled: bool) -> None:
         old = self.state.targets[command]
+        if enabled:
+            self.state.enabled = True
         self.state.targets[command] = TargetSpec(command, old.provider, enabled)
         install_shim(command)
         self._render(command)
@@ -50,6 +52,7 @@ class RoutingController:
             raise ValueError(f"unknown provider: {provider}")
         if _resolve_outside_shim(command) is None:
             raise ValueError(f"command not found on PATH: {command}")
+        self.state.enabled = True
         self.state.targets[command] = TargetSpec(command, provider, True)
         install_shim(command)
         self._render(command)
