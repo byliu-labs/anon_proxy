@@ -9,6 +9,12 @@ import time
 
 from anon_proxy import client_config
 from anon_proxy.menubar import config as cfg
+from anon_proxy.menubar.onboarding import (
+    default_profile,
+    install_routing,
+    is_routing_installed,
+    uninstall_routing,
+)
 from anon_proxy.menubar import themes
 from anon_proxy.menubar.render import format_watch_line, render
 from anon_proxy.menubar.statusclient import fetch_status
@@ -145,6 +151,18 @@ def _run_macos_app(
             targets_menu.add(None)
             targets_menu.add(rumps.MenuItem("Add target...", callback=self._add_target))
             self.menu.add(targets_menu)
+            profile = default_profile()
+            if is_routing_installed(profile):
+                self.menu.add(
+                    rumps.MenuItem(
+                        "Uninstall routing...", callback=self._uninstall_routing
+                    )
+                )
+            else:
+                self.menu.add(
+                    rumps.MenuItem("Set up routing...", callback=self._setup_routing)
+                )
+            self.menu.add(None)
             self.menu.add(rumps.MenuItem("Reset alarm", callback=self._reset_alarm))
             self.menu.add(None)
             self.menu.add(rumps.MenuItem("Start proxy", callback=self._start_proxy))
@@ -187,6 +205,48 @@ def _run_macos_app(
             self._save_cfg()
             if self._start_at_login_item is not None:
                 self._start_at_login_item.state = 1 if enabled else 0
+
+        def _routing_commands(self) -> list[str]:
+            return list(self._routing.state.targets)
+
+        def _setup_routing(self, _sender) -> None:
+            commands = self._routing_commands()
+            if not commands:
+                rumps.alert("No routing targets configured")
+                return
+            profile = default_profile()
+            response = rumps.alert(
+                title="Set up anon-proxy routing?",
+                message=f"This adds {profile} PATH setup for: {', '.join(commands)}",
+                ok="Set up",
+                cancel="Cancel",
+            )
+            if not response:
+                return
+            try:
+                install_routing(commands, profile)
+            except OSError as exc:
+                rumps.alert(str(exc))
+                return
+            self._build_menu()
+
+        def _uninstall_routing(self, _sender) -> None:
+            commands = self._routing_commands()
+            profile = default_profile()
+            response = rumps.alert(
+                title="Uninstall anon-proxy routing?",
+                message=f"This removes anon-proxy PATH setup from {profile}.",
+                ok="Uninstall",
+                cancel="Cancel",
+            )
+            if not response:
+                return
+            try:
+                uninstall_routing(commands, profile)
+            except OSError as exc:
+                rumps.alert(str(exc))
+                return
+            self._build_menu()
 
         def _reset_alarm(self, _sender) -> None:
             self._latch.reset()

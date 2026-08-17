@@ -62,21 +62,23 @@ def path_snippet() -> str:
 
 
 def install_path_entry(profile: Path) -> bool:
-    text = profile.read_text() if profile.exists() else ""
+    # encoding pinned: the packaged app runs under an ASCII default locale, so a
+    # bare read_text() crashes on any non-ASCII byte in the user's profile.
+    text = profile.read_text(encoding="utf-8") if profile.exists() else ""
     if PATH_MARKER in text:
         return False
     if text and not text.endswith("\n"):
         text += "\n"
-    profile.write_text(text + path_snippet())
+    profile.write_text(text + path_snippet(), encoding="utf-8")
     return True
 
 
 def remove_path_entry(profile: Path) -> bool:
     if not profile.exists():
         return False
-    lines = profile.read_text().splitlines(keepends=True)
+    lines = profile.read_text(encoding="utf-8").splitlines(keepends=True)
     kept = [line for line in lines if PATH_MARKER not in line]
     if len(kept) == len(lines):
         return False
-    profile.write_text("".join(kept))
+    profile.write_text("".join(kept), encoding="utf-8")
     return True
