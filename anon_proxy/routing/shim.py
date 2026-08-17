@@ -19,7 +19,12 @@ FRAG="${{ANON_PROXY_HOME:-$HOME/.anon-proxy}}/env.d/{command}.sh"
 REAL=
 OLDIFS=$IFS
 IFS=:
+FIRST=1
 for d in $PATH; do
+  if [ "$FIRST" = 1 ]; then
+    FIRST=0
+    [ -x "$d/$CMD" ] && continue
+  fi
   [ "$d" = "$SHIM_DIR" ] && continue
   [ "$d/$CMD" = "$SHIM_DIR/$CMD" ] && continue
   [ "$d/$CMD" -ef "$SHIM_DIR/$CMD" ] 2>/dev/null && continue
