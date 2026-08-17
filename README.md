@@ -380,11 +380,18 @@ The dropdown includes:
 - `Reset alarm`: re-arms the masking-error latch after you have inspected it.
 - `Start proxy`, `Stop proxy`, `Restart proxy`: supervises only a proxy process
   launched by this menu-bar app.
+- `Route through proxy`: toggles registered CLI targets such as `claude` and
+  `codex` through PATH shims under `~/.anon-proxy/bin`. The generated env
+  fragments only point clients at loopback provider URLs.
 - `Start at login`: installs or removes the launchd agent
   `com.anon-proxy.menubar`.
 
 Use `--start-proxy` when you want the menu-bar app to launch and supervise the
 proxy immediately instead of attaching to an already-running proxy.
+
+Claude Code routing is verified for API-key mode via `ANTHROPIC_BASE_URL`.
+Claude subscription OAuth clients may not honor that variable; confirm locally
+before relying on menu-bar routing for that auth mode.
 
 Regenerate the committed dino frames after editing the pixel matrices:
 
