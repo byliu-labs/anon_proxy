@@ -33,6 +33,21 @@ def test_known_verbs_registered():
     assert set(cli._COMMANDS) == {"download-model", "setup-client", "install-app", "up"}
 
 
+def test_install_app_writes_executable_bundle(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        "anon_proxy.app_bundle.menubar_exec_path",
+        lambda: "/usr/local/bin/anon-proxy-menubar",
+    )
+
+    assert cli.main(["install-app", "--dest", str(tmp_path)]) == 0
+
+    stub = tmp_path / "anon-proxy.app" / "Contents" / "MacOS" / "anon-proxy"
+    assert stub.is_file()
+    assert stub.stat().st_mode & 0o111
+    assert "/usr/local/bin/anon-proxy-menubar" in stub.read_text()
+
+
 def test_up_prefetches_when_uncached(monkeypatch):
     events = []
     monkeypatch.setattr("anon_proxy.model_cache.is_cached", lambda backend: False)

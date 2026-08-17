@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a reproducible anon-proxy failure.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here. Follow SECURITY.md and email
+        the maintainer first.
+  - type: input
+    id: version
+    attributes:
+      label: anon-proxy version
+      placeholder: "0.1.0, commit SHA, or branch"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.10.14"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Detection backend
+      options:
+        - auto
+        - onnx
+        - torch/cpu
+        - torch/cuda
+        - torch/mps
+        - unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Upstream provider
+      options:
+        - anthropic
+        - openai
+        - zai
+        - custom
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Include commands, config shape, and sanitized logs.
+      placeholder: |
+        1. uv sync --extra onnx --dev
+        2. uv run python -m anon_proxy.server ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

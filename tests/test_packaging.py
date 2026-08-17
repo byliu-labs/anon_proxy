@@ -29,6 +29,7 @@ def test_console_scripts_present():
     assert set(scripts) == {
         "anon-proxy",
         "anon-proxy-bench",
+        "anon-proxy-build-app",
         "anon-proxy-capture-report",
         "anon-proxy-eval",
         "anon-proxy-menubar",
@@ -36,6 +37,7 @@ def test_console_scripts_present():
     }
     assert scripts["anon-proxy"] == "anon_proxy.cli:main"
     assert scripts["anon-proxy-bench"] == "anon_proxy.bench:main"
+    assert scripts["anon-proxy-build-app"] == "anon_proxy.app_bundle:main"
     assert scripts["anon-proxy-eval"] == "anon_proxy.eval:main"
 
 
