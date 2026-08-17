@@ -537,11 +537,12 @@ See [`SECURITY.md`](SECURITY.md). For a privacy tool, *quietly* is usually bette
 
 ## Next steps / roadmap
 
-- **Quality assurance** : Enhance PII detection quality tracking and add comprehensive unit/integration tests with benchmarking.
+- ~~**Quality assurance** : PII detection quality tracking plus unit/integration tests and a benchmarking harness.~~ ✅
 - ~~**Observability** : Structured operational logs plus detection, latency, cache, and canary telemetry.~~ ✅
 - ~~**Persistence** : PII mappings can be persisted to disk via `--store` so placeholder consistency survives server restarts.~~ ✅
-- **Usability** : Now supporting Anthropic and OpenAI APIs, but need more compatibility testing and expand to other potential providers.
-- **Dev infrastructure** : Set up CI, contribution guidelines, and project templates to streamline community development.
+- ~~**Dev infrastructure** : CI, contribution guidelines, issue/PR templates, Dependabot/CodeQL, and a release workflow.~~ ✅
+- **Usability** : Anthropic and OpenAI (Chat + Responses) adapters ship with a compatibility matrix; expanding to more providers is still open.
+- **Distribution** : Release scaffolding (workflow, changelog extraction, unsigned macOS `.app`) is in place; cutting a signed, downloadable build still needs the PyPI-publish and Apple-signing decisions.
 
 ---
 
