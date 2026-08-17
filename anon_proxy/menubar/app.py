@@ -62,6 +62,20 @@ def watch_loop(url: str, *, interval: float = 2.0) -> None:
         print("\nstopped.")
 
 
+def format_target_status(
+    command: str, *, enabled: bool, procs: list, status_available: bool = True
+) -> str:
+    if not status_available:
+        return f"{command}: {'on' if enabled else 'off'} - status unavailable"
+    if not procs:
+        return f"{command}: {'on' if enabled else 'off'} - not running"
+    total = len(procs)
+    proxied = sum(1 for proc in procs if proc.proxied)
+    raw = total - proxied
+    tail = " - restart to apply" if enabled and raw else ""
+    return f"{command}: {proxied} proxied, {raw} raw ({total} running){tail}"
+
+
 def _run_macos_app(
     url: str, *, start_proxy: bool = False, backend: str | None = None
 ) -> None:
@@ -74,6 +88,14 @@ def _run_macos_app(
             self._url = url or self._cfg["url"]
             self._latch = AlarmLatch()
             self._supervisor = ProxySupervisor(backend=backend)
+            from anon_proxy.routing.controller import RoutingController
+            from anon_proxy.routing.scan import env_visibility_available
+            from anon_proxy.routing.state import load_state
+
+            self._routing = RoutingController(load_state())
+            self._routing.sync_all()
+            self._target_items: dict[str, object] = {}
+            self._target_status_available = env_visibility_available()
             self._last_status: dict | None = None
             self._frame_idx = 0
             self._last_frame_at = 0.0
@@ -84,7 +106,10 @@ def _run_macos_app(
             self._start_at_login_item = None
             self._build_menu()
             if start_proxy:
-                self._supervisor.start()
+                port = ProxySupervisor.free_port()
+                self._url = f"http://127.0.0.1:{port}/_status"
+                self._supervisor.start(extra_args=["--port", str(port)])
+                self._routing.set_port(port)
             rumps.Timer(self._tick, 0.1).start()
 
         def _load_frames(self) -> dict:
@@ -110,6 +135,16 @@ def _run_macos_app(
                 theme_menu.add(item)
                 self._theme_items[name] = item
             self.menu.add(theme_menu)
+            targets_menu = rumps.MenuItem("Route through proxy")
+            self._target_items = {}
+            for command, target in self._routing.state.targets.items():
+                item = rumps.MenuItem(command, callback=self._toggle_target)
+                item.state = 1 if target.enabled else 0
+                targets_menu.add(item)
+                self._target_items[command] = item
+            targets_menu.add(None)
+            targets_menu.add(rumps.MenuItem("Add target...", callback=self._add_target))
+            self.menu.add(targets_menu)
             self.menu.add(rumps.MenuItem("Reset alarm", callback=self._reset_alarm))
             self.menu.add(None)
             self.menu.add(rumps.MenuItem("Start proxy", callback=self._start_proxy))
@@ -157,13 +192,60 @@ def _run_macos_app(
             self._latch.reset()
 
         def _start_proxy(self, _sender) -> None:
-            self._supervisor.start()
+            port = ProxySupervisor.free_port()
+            self._url = f"http://127.0.0.1:{port}/_status"
+            self._supervisor.start(extra_args=["--port", str(port)])
+            self._routing.set_port(port)
 
         def _stop_proxy(self, _sender) -> None:
             self._supervisor.stop()
 
         def _restart_proxy(self, _sender) -> None:
-            self._supervisor.restart()
+            port = ProxySupervisor.free_port()
+            self._url = f"http://127.0.0.1:{port}/_status"
+            self._supervisor.restart(extra_args=["--port", str(port)])
+            self._routing.set_port(port)
+
+        def _toggle_target(self, sender) -> None:
+            command = str(sender.title)
+            enabled = not bool(sender.state)
+            self._routing.set_enabled(command, enabled)
+            sender.state = 1 if enabled else 0
+
+        def _add_target(self, _sender) -> None:
+            resp = rumps.Window(
+                "command provider (for example: aider openai)",
+                "Add routed CLI target",
+                dimensions=(240, 24),
+            ).run()
+            if not resp.clicked or not resp.text.strip():
+                return
+            parts = resp.text.split()
+            if len(parts) != 2:
+                rumps.alert("Enter: <command> <provider>")
+                return
+            command, provider = parts
+            try:
+                self._routing.add_target(command, provider)
+            except ValueError as exc:
+                rumps.alert(str(exc))
+                return
+            self._build_menu()
+
+        def _refresh_targets(self) -> None:
+            for command, item in self._target_items.items():
+                target = self._routing.state.targets[command]
+                procs = self._routing.status(command)
+                item.title = command
+                if hasattr(item, "_menuitem"):
+                    item._menuitem.setToolTip_(
+                        format_target_status(
+                            command,
+                            enabled=target.enabled,
+                            procs=procs,
+                            status_available=self._target_status_available,
+                        )
+                    )
 
         def _copy_url(self, provider: str) -> None:
             url = client_config.base_url_for(provider)
@@ -199,6 +281,7 @@ def _run_macos_app(
             self.title = f" {state.title}" if state.title else ""
             self.tooltip = state.tooltip
             self._refresh_status_lines(state.menu)
+            self._refresh_targets()
 
         def _refresh_status_lines(self, lines: list[str]) -> None:
             for idx, item in enumerate(self._status_items):
