@@ -41,6 +41,7 @@ OPENAI_POLICY = Policy(
     pass_paths=frozenset({("tools",), ("functions",), ("instructions",)}),
     pass_block_types=frozenset(),
     pass_block_subtrees={"image_url": "image_url"},
+    json_string_keys=frozenset({"arguments"}),
 )
 
 

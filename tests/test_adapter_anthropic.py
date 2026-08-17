@@ -223,6 +223,16 @@ class TestMaskRequestBlockListContent:
 
 
 class TestMaskRequestFieldsNotTouched:
+    def test_top_level_metadata_masks_string_leaves(self, masker):
+        body = {
+            "metadata": {"user_id": "Alice"},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        out = anth.mask_request(body, masker)
+
+        assert out["metadata"] == {"user_id": "<PERSON_1>"}
+
     def test_system_prompt_left_alone(self, masker):
         body = {
             "system": "You may speak to Alice",

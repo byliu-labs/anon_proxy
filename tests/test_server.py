@@ -25,6 +25,7 @@ from anon_proxy.events import EventSink
 from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker
 from anon_proxy.metrics import ProxyMetrics
+from anon_proxy.privacy_filter import DEFAULT_BATCH_SIZE
 from anon_proxy.registry import MaskerRegistry
 from anon_proxy.stats import MaskerStats
 from anon_proxy.server import (
@@ -275,6 +276,91 @@ class TestMultiUserProxy:
         assert resp_b.status_code == 200
         assert resp_a.json()["content"][0]["text"] == "Hello Alice"
         assert resp_b.json()["content"][0]["text"] == "Hello <PERSON_1>"
+
+    def test_registry_get_runs_off_event_loop(self, make_filter):
+        class OffLoopRegistry:
+            def __init__(self):
+                self.masker = Masker(filter=make_filter(), store=PIIStore())
+
+            def get(self, _cid):
+                with pytest.raises(RuntimeError):
+                    asyncio.get_running_loop()
+                return self.masker
+
+            def store_path(self, _cid):
+                return None
+
+            def store_size(self):
+                return len(self.masker.store)
+
+        app = build_app(
+            registry=OffLoopRegistry(),
+            extra_upstreams={
+                "stub": UpstreamConfig(
+                    name="stub",
+                    base_url="https://upstream.example",
+                    path_prefix="",
+                    adapter="anthropic",
+                    sse=True,
+                )
+            },
+            system_inject=False,
+        )
+
+        with patch(
+            "anon_proxy.server._upstream_request",
+            AsyncMock(return_value=_anthropic_echo_response()),
+        ):
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/stub/v1/messages",
+                    headers={"x-api-key": "A"},
+                    json={
+                        "model": "claude",
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                )
+
+        assert resp.status_code == 200
+
+
+class TestCliBatchSize:
+    def test_parser_batch_size_default_uses_shared_constant(self):
+        args = _build_parser().parse_args([])
+
+        assert args.batch_size == DEFAULT_BATCH_SIZE
+
+    def test_explicit_default_batch_size_does_not_build_custom_filter(
+        self, monkeypatch
+    ):
+        built = {}
+
+        def fail_filter(*_args, **_kwargs):
+            raise AssertionError("default batch size should not build PrivacyFilter")
+
+        def fake_build_app(**kwargs):
+            built.update(kwargs)
+            return object()
+
+        monkeypatch.setattr("anon_proxy.server.PrivacyFilter", fail_filter)
+        monkeypatch.setattr("anon_proxy.server.build_app", fake_build_app)
+        monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: None)
+
+        from anon_proxy import server
+
+        server.main(
+            [
+                "--batch-size",
+                str(DEFAULT_BATCH_SIZE),
+                "--no-default-patterns",
+                "--canary",
+                "off",
+                "--min-known-entity-len",
+                "0",
+            ]
+        )
+
+        assert built["masker"] is None
 
 
 # ====================================================================# _should_mask_request

@@ -122,6 +122,8 @@ class Masker:
         self._cache_size = cache_size
         self._stats = stats
         self._events = event_sink or EventSink()
+        self._last_unknown_count = 0
+        self._seen_unknown: set[str] = set()
         self._cache_lock = threading.RLock()
         # LRU cache: content_hash -> (entities, masked_text)
         self._cache: OrderedDict[str, tuple[list[PIIEntity], str]] = OrderedDict()
@@ -409,7 +411,9 @@ class Masker:
         unknown = self._find_unknown_tokens(result)
         request_id = _TELEMETRY_CONTEXT.get().get("request_id")
         for token in unknown:
-            self._events.unknown_token(token, request_id=request_id)
+            if token not in self._seen_unknown:
+                self._events.unknown_token(token, request_id=request_id)
+                self._seen_unknown.add(token)
         self._last_unknown_count = len(unknown)
         if self._stats is not None:
             self._stats.record_unknown_tokens(len(unknown))

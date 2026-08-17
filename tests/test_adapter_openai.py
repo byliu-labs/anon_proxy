@@ -131,6 +131,44 @@ class TestMaskRequestToolCalls:
         args = json.loads(out["messages"][0]["tool_calls"][0]["function"]["arguments"])
         assert args == {"to": "<PERSON_1>", "body": "Hi"}
 
+    def test_function_arguments_masked_by_json_value_not_raw_blob(
+        self, make_masker, fake_pipeline
+    ):
+        arguments = json.dumps({"to": "alice@example.com", "body": "call Bob"})
+        fake_pipeline.set(
+            arguments,
+            [span("private_email", 1, 26, word='"to": "alice@example.com"')],
+        )
+        fake_pipeline.set(
+            "alice@example.com",
+            [span("private_email", 0, 17, word="alice@example.com")],
+        )
+        fake_pipeline.set("call Bob", [span("private_person", 5, 8, word="Bob")])
+        masker = make_masker()
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "x",
+                            "type": "function",
+                            "function": {
+                                "name": "send",
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        out = oai.mask_request(body, masker)
+        args = json.loads(out["messages"][0]["tool_calls"][0]["function"]["arguments"])
+
+        assert args == {"to": "<EMAIL_1>", "body": "call <PERSON_1>"}
+
     def test_function_arguments_invalid_json_masked_as_string(self, masker):
         body = {
             "messages": [

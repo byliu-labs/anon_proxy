@@ -22,6 +22,7 @@ import pytest
 
 from anon_proxy import privacy_filter
 from anon_proxy.privacy_filter import (
+    DEFAULT_BATCH_SIZE,
     DEFAULT_MERGE_GAP_ALLOWED,
     PrivacyFilter,
     _gap_mergeable,
@@ -172,6 +173,11 @@ class TestBackendResolution:
         monkeypatch.setattr(privacy_filter, "_module_available", lambda name: True)
         f = make_filter()
         assert f.backend == "torch"
+
+    def test_filter_batch_size_uses_shared_default(self, make_filter):
+        f = make_filter()
+
+        assert f._batch_size == DEFAULT_BATCH_SIZE
 
 
 # ---------------------------------------------------------------------------

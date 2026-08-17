@@ -25,21 +25,7 @@ jobs:
         run: uv build
 
       - name: Extract changelog entry
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          tag = os.environ["GITHUB_REF_NAME"]
-          version = tag.removeprefix("v")
-          changelog = Path("CHANGELOG.md").read_text()
-          pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
-          match = re.search(pattern, changelog, flags=re.M | re.S)
-          if not match:
-              raise SystemExit(f"CHANGELOG.md has no section for {tag}")
-          Path("release-notes.md").write_text(match.group(0).strip() + "\n")
-          PY
+        run: uv run python anon_proxy/release_notes.py "$GITHUB_REF_NAME"
 
       - name: Draft GitHub release
         uses: softprops/action-gh-release@v2

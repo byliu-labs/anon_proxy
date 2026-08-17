@@ -31,6 +31,7 @@ DEFAULT_MERGE_GAP_ALLOWED: dict[str, str] = {
 }
 
 DEFAULT_CHUNK_SIZE = 6000
+DEFAULT_BATCH_SIZE = 8
 # Backends. "auto"/"torch"/"cpu"/"mps"/"cuda" all run the torch HF pipeline
 # (cpu/mps/cuda pin the device); "onnx" loads the pre-quantized graph the model
 # repo already ships and runs it through ONNX Runtime. The torch path is
@@ -81,7 +82,7 @@ class PrivacyFilter:
         merge_adjacent: bool = True,
         merge_gap_allowed: dict[str, str] | None = None,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
-        batch_size: int = 8,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         device: int | str | None = None,
         backend: Backend = "auto",
         onnx_provider: str = DEFAULT_ONNX_PROVIDER,

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from anon_proxy.policy import Policy, mask_body
+from anon_proxy.policy import Policy, _walk_value, mask_body
+from anon_proxy.regex_detector import RegexDetector
 from tests.conftest import span
 
 
@@ -72,3 +73,26 @@ class TestFailClosedWalker:
         mask_body(body, masker, TEST_POLICY)
 
         assert len(fake_pipeline.calls) == calls_before
+
+    def test_bare_list_items_are_masked(self, make_masker):
+        masker = make_masker(extra_detectors=[RegexDetector({"PERSON": r"\bAlice\b"})])
+        body = {"future": ["Alice"]}
+
+        out = mask_body(body, masker, TEST_POLICY)
+
+        assert out["future"] == ["<PERSON_1>"]
+
+    def test_pass_keys_apply_only_to_keyed_values(self, make_masker):
+        masker = make_masker(extra_detectors=[RegexDetector({"WORD": r"\bmodel\b"})])
+        body = {"items": ["model"]}
+
+        out = mask_body(body, masker, TEST_POLICY)
+
+        assert out["items"] == ["<WORD_1>"]
+
+    def test_keyless_walk_masks_nested_strings(self, make_masker):
+        masker = make_masker(extra_detectors=[RegexDetector({"PERSON": r"\bAlice\b"})])
+
+        out = _walk_value(None, {"items": ["Alice"]}, masker, TEST_POLICY)
+
+        assert out == {"items": ["<PERSON_1>"]}

@@ -861,6 +861,24 @@ class TestUnmaskUnknownTokensPassThrough:
 
 
 class TestUnknownPlaceholderDetection:
+    def test_last_unknown_count_initialized(self, make_masker):
+        m = make_masker()
+
+        assert m._last_unknown_count == 0
+
+    def test_repeated_unknown_token_warns_once_but_counts_each_call(self, make_masker):
+        stream = io.StringIO()
+        m = make_masker(event_sink=EventSink(stream=stream))
+        stats = MaskerStats()
+        m.attach_stats(stats)
+
+        assert m.unmask("first <PERSON_9>") == "first <PERSON_9>"
+        assert m.unmask("again <PERSON_9>") == "again <PERSON_9>"
+
+        assert stream.getvalue().count("unknown placeholder <PERSON_9>") == 1
+        assert m._last_unknown_count == 1
+        assert stats.snapshot()["unknown_tokens"] == 2
+
     def test_unknown_token_warns_and_passes_through(self, make_masker, store, capsys):
         m = make_masker()
         store.get_or_create("PERSON", "Alice")
