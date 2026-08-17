@@ -10,8 +10,9 @@ uv sync --extra package --extra menubar
 ANON_PROXY_CODESIGN_IDENTITY=- uv run python packaging/setup_app.py py2app
 ```
 
-The signing identity defaults to ad-hoc (`-`). A Developer ID build can use the
-same script by setting the identity:
+The signing identity defaults to ad-hoc (`-`). The build script signs the
+bundle after py2app creates it. A Developer ID build can use the same script by
+setting the identity:
 
 ```bash
 ANON_PROXY_CODESIGN_IDENTITY="Developer ID Application: Your Name" \
