@@ -424,7 +424,8 @@ def build_app(
     async def lifespan(app: Starlette):
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=10.0)
+            timeout=httpx.Timeout(600.0, connect=10.0),
+            trust_env=True,
         )
         rollup_task = None
         try:
