@@ -73,6 +73,12 @@ def test_bundle_extra_installs_pyinstaller():
     assert any(d.startswith("pyinstaller") for d in extras["bundle"])
 
 
+def test_package_extra_installs_py2app_on_macos():
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "package" in extras, "expected a 'package' extra for py2app packaging"
+    assert any(d.startswith("py2app") for d in extras["package"])
+
+
 def test_pyinstaller_spec_excludes_torch():
     spec = PYINSTALLER_SPEC.read_text()
     assert "excludes=" in spec

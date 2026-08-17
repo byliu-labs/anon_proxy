@@ -56,6 +56,9 @@ bundle = [
 menubar = [
     "rumps>=0.4.0; sys_platform == 'darwin'",
 ]
+package = [
+    "py2app>=0.28; sys_platform == 'darwin'",
+]
 # GPU-capable inference backend: the full torch HF pipeline. Heavier install
 # (~2 GB) — opt in when you have a CUDA/MPS GPU or want the torch reference.
 # Without it, the proxy runs on the onnx extra (or errors with an install hint).
