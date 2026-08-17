@@ -47,7 +47,6 @@ ANTHROPIC_POLICY = Policy(
         {
             ("system",),
             ("tools",),
-            ("metadata",),
             ("mcp_servers",),
         }
     ),

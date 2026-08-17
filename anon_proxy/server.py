@@ -43,6 +43,7 @@ from anon_proxy.mapping import PIIStore, atomic_write_json
 from anon_proxy.masker import Masker, telemetry_scope
 from anon_proxy.metrics import ProxyMetrics
 from anon_proxy.privacy_filter import (
+    DEFAULT_BATCH_SIZE,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_ONNX_PROVIDER,
     PrivacyFilter,
@@ -612,7 +613,7 @@ async def _handle_proxy(
                 status_code=401,
                 media_type="application/json",
             )
-        masker = registry.get(cid)
+        masker = await asyncio.to_thread(registry.get, cid)
         store_save_path = registry.store_path(cid)
     else:
         masker = request.app.state.masker
@@ -1149,9 +1150,12 @@ def _build_parser():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=int(os.environ.get("ANON_PROXY_BATCH_SIZE", "8")),
+        default=int(os.environ.get("ANON_PROXY_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))),
         metavar="N",
-        help="Batch size for model inference over chunks (default: 8).",
+        help=(
+            "Batch size for model inference over chunks "
+            f"(default: {DEFAULT_BATCH_SIZE})."
+        ),
     )
     parser.add_argument(
         "--backend",
@@ -1237,7 +1241,7 @@ def main(argv: list[str] | None = None) -> None:
     if (
         cfg.merge_gap
         or args.chunk_size != DEFAULT_CHUNK_SIZE
-        or args.batch_size != 8
+        or args.batch_size != DEFAULT_BATCH_SIZE
         or args.backend != "auto"
         or args.onnx_provider != DEFAULT_ONNX_PROVIDER
     ):
