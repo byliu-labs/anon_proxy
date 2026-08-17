@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,12 @@ class ProxySupervisor:
             cmd = server_command(server_args)
         self._cmd = cmd
         self._proc: subprocess.Popen | None = None
+
+    @staticmethod
+    def free_port() -> int:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
