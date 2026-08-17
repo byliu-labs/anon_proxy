@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  python-artifacts:
+    name: Build Python artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Extract changelog entry
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tag.removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text()
+          pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
+          match = re.search(pattern, changelog, flags=re.M | re.S)
+          if not match:
+              raise SystemExit(f"CHANGELOG.md has no section for {tag}")
+          Path("release-notes.md").write_text(match.group(0).strip() + "\n")
+          PY
+
+      - name: Draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: release-notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+
+  macos-app:
+    name: Build unsigned macOS app
+    runs-on: macos-latest
+    needs: python-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install app dependencies
+        run: uv sync --extra onnx --extra menubar --dev
+
+      - name: Build app bundle
+        run: uv run --extra onnx --extra menubar anon-proxy-build-app --dest dist --exec-path "/usr/bin/env anon-proxy-menubar"
+
+      - name: Build DMG
+        run: |
+          mkdir -p dist/dmg-root
+          cp -R dist/anon-proxy.app dist/dmg-root/
+          hdiutil create \
+            -volname "anon-proxy" \
+            -srcfolder dist/dmg-root \
+            -ov \
+            -format UDZO \
+            "dist/anon-proxy-${GITHUB_REF_NAME}.dmg"
+
+      - name: Attach DMG to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/anon-proxy-*.dmg

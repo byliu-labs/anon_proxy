@@ -34,3 +34,18 @@ def build_app_bundle(dest_dir: Path, *, exec_path: str) -> Path:
     stub.write_text(f'#!/bin/bash\nexec {exec_path} "$@"\n')
     stub.chmod(0o755)
     return app
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="anon-proxy-build-app")
+    parser.add_argument("--dest", default="dist")
+    parser.add_argument("--exec-path", default=menubar_exec_path())
+    ns = parser.parse_args(argv)
+
+    dest = Path(ns.dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    app = build_app_bundle(dest, exec_path=ns.exec_path)
+    print(app)
+    return 0

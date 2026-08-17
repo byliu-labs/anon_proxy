@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      inference-backends:
+        patterns:
+          - torch
+          - transformers
+          - onnxruntime
+      app-runtime:
+        patterns:
+          - starlette
+          - uvicorn*
+          - httpx
+          - anthropic
+          - openai
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

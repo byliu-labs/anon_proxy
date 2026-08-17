@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/byliu-labs/anon_proxy/blob/main/SECURITY.md
+    about: Please email the maintainer first instead of opening a public issue.
+  - name: Ask a usage question
+    url: https://github.com/byliu-labs/anon_proxy/discussions
+    about: Use discussions for setup questions and non-bug support.

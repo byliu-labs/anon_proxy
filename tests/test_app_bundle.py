@@ -27,3 +27,16 @@ def test_menubar_exec_path_falls_back(monkeypatch):
     path = app_bundle.menubar_exec_path()
 
     assert "anon_proxy.menubar.app" in path
+
+
+def test_build_app_cli_writes_bundle(tmp_path, capsys):
+    rc = app_bundle.main(
+        ["--dest", str(tmp_path), "--exec-path", "/usr/local/bin/anon-proxy-menubar"]
+    )
+
+    stub = tmp_path / "anon-proxy.app" / "Contents" / "MacOS" / "anon-proxy"
+    assert rc == 0
+    assert stub.is_file()
+    assert os.access(stub, os.X_OK)
+    assert "/usr/local/bin/anon-proxy-menubar" in stub.read_text()
+    assert "anon-proxy.app" in capsys.readouterr().out
