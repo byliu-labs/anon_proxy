@@ -389,6 +389,28 @@ The dropdown includes:
 Use `--start-proxy` when you want the menu-bar app to launch and supervise the
 proxy immediately instead of attaching to an already-running proxy.
 
+### Install as an app
+
+```bash
+uv sync --extra menubar --extra package
+ANON_PROXY_CODESIGN_IDENTITY=- uv run python packaging/setup_app.py py2app
+open dist/anon-proxy.app        # first launch: right-click > Open (ad-hoc signed)
+```
+
+### Route apps without a prefix
+
+From the menu: **Set up routing...** to install the PATH shim, then
+**Route through proxy -> claude / codex** to toggle. A newly started
+`claude` or `codex` process is then masked with no command prefix.
+Already-running sessions must be restarted to apply; the menu marks them
+`raw - restart to apply`. **Uninstall routing...** removes the shims and
+restores your shell profile.
+
+Routing points the tool at a loopback proxy, so if the proxy is stopped the
+tool errors instead of sending raw traffic. It works alongside a VPN/utun and a
+corporate `HTTPS_PROXY`: loopback is never tunneled, and the proxy chains
+outbound through your corporate proxy, which only sees masked traffic.
+
 Claude Code routing is verified for API-key mode via `ANTHROPIC_BASE_URL`.
 Claude subscription OAuth clients may not honor that variable; confirm locally
 before relying on menu-bar routing for that auth mode.
